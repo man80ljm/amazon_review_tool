@@ -15,6 +15,10 @@ from core.keywords import top_keywords_by_cluster
 from core.representatives import top_representatives
 from core.robustness import clustering_stability
 
+from core.plot_k import recommend_k, plot_k_curves
+from core.insights import asin_cluster_percent, plot_heatmap, cluster_priority, plot_priority
+
+
 class App(ttk.Frame):
     def __init__(self, master, cfg: AppConfig):
         super().__init__(master)
@@ -35,7 +39,7 @@ class App(ttk.Frame):
         self._build_ui()
 
     def _build_ui(self):
-        self.master.title("Amazon Review Analyzer (DMIT A路线)")
+        self.master.title("Review Analyzer")
         self.pack(fill="both", expand=True)
 
         top = ttk.Frame(self)
@@ -44,6 +48,10 @@ class App(ttk.Frame):
         ttk.Button(top, text="导入CSV", command=self.on_load_csv).pack(side="left")
         ttk.Button(top, text="运行 Step1-5（全流程）", command=self.on_run_all).pack(side="left", padx=8)
         ttk.Button(top, text="导出结果", command=self.on_export).pack(side="left")
+
+        ttk.Button(top, text="导出/显示K选择图", command=self.on_plot_k).pack(side="left", padx=8)
+        ttk.Button(top, text="跨ASIN对比", command=self.on_asin_compare).pack(side="left", padx=8)
+        ttk.Button(top, text="优先级排序", command=self.on_priority).pack(side="left", padx=8)
 
         self.status = tk.StringVar(value="Ready")
         ttk.Label(top, textvariable=self.status).pack(side="right")
@@ -76,6 +84,8 @@ class App(ttk.Frame):
         # Bottom controls
         bottom = ttk.Frame(self)
         bottom.pack(fill="x", padx=10, pady=6)
+        self.auto_apply_k = tk.BooleanVar(value=True)
+        ttk.Checkbutton(bottom, text="扫描后自动应用推荐K", variable=self.auto_apply_k).pack(side="left", padx=10)
 
         ttk.Label(bottom, text="聚类K:").pack(side="left")
         self.k_var = tk.IntVar(value=5)
@@ -83,6 +93,9 @@ class App(ttk.Frame):
 
         self.only_negative = tk.BooleanVar(value=True)
         ttk.Checkbutton(bottom, text="仅分析负面评论（推荐）", variable=self.only_negative).pack(side="left", padx=10)
+        
+        self.auto_apply_k = tk.BooleanVar(value=True)
+        ttk.Checkbutton(bottom, text="扫描后自动应用推荐K", variable=self.auto_apply_k).pack(side="left", padx=10)
 
         ttk.Button(bottom, text="仅重跑 Step4-5（用当前K）", command=self.on_run_cluster_only).pack(side="right")
 
@@ -176,6 +189,11 @@ class App(ttk.Frame):
         self.k_scan = scan_k(self.emb, self.cfg.k_min, self.cfg.k_max, random_state=self.cfg.random_state)
         self._render_k_scan()
 
+        rec = recommend_k(self.k_scan.k_to_silhouette)
+        if self.auto_apply_k.get():
+            self.k_var.set(rec.best_k)
+
+
         # Step4 fit with chosen k
         self._pipeline_cluster_only()
 
@@ -233,6 +251,47 @@ class App(ttk.Frame):
                 self.res_text.insert("end", f"- ({row['ASIN']}, Star={row['Star']}) {str(row['review_text'])[:180]}...\n")
             self.res_text.insert("end", "\n")
 
+    def on_plot_k(self):
+        if self.k_scan is None:
+            messagebox.showwarning("提示", "请先运行全流程（至少跑到选K扫描）")
+            return
+        rec = recommend_k(self.k_scan.k_to_silhouette)
+        png_path = os.path.join(self.output_dir, "k_selection.png")
+        plot_k_curves(self.k_scan.k_to_inertia, self.k_scan.k_to_silhouette, rec.best_k, png_path)
+        messagebox.showinfo("完成", f"K选择图已导出：\n{png_path}\n推荐K={rec.best_k}（可手动修改K再重跑Step4-5）")
+
+    def on_asin_compare(self):
+        if self.df_work is None or "cluster_id" not in self.df_work.columns:
+            messagebox.showwarning("提示", "请先完成聚类（Step4-5）")
+            return
+        pivot = asin_cluster_percent(self.df_work, asin_col="ASIN", cluster_col="cluster_id")
+        self.asin_pivot = pivot
+
+        png_path = os.path.join(self.output_dir, "asin_cluster_heatmap.png")
+        fig = plot_heatmap(pivot, save_path=png_path)
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+
+        csv_path = os.path.join(self.output_dir, "asin_cluster_percent.csv")
+        pivot.round(2).to_csv(csv_path, encoding="utf-8-sig")
+        messagebox.showinfo("完成", f"跨ASIN对比已导出：\n{png_path}\n{csv_path}")
+
+    def on_priority(self):
+        if self.df_work is None or "cluster_id" not in self.df_work.columns:
+            messagebox.showwarning("提示", "请先完成聚类（Step4-5）")
+            return
+        pr = cluster_priority(self.df_work, cluster_col="cluster_id", star_col="Star")
+        self.priority_df = pr
+
+        png_path = os.path.join(self.output_dir, "cluster_priority.png")
+        fig = plot_priority(pr, save_path=png_path)
+        import matplotlib.pyplot as plt
+        plt.close(fig)
+
+        csv_path = os.path.join(self.output_dir, "cluster_priority.csv")
+        pr.to_csv(csv_path, index=False, encoding="utf-8-sig")
+        messagebox.showinfo("完成", f"优先级排序已导出：\n{png_path}\n{csv_path}")
+
     def on_export(self):
         if self.df_work is None or self.labels is None:
             messagebox.showwarning("提示", "请先运行流程得到聚类结果")
@@ -272,6 +331,16 @@ class App(ttk.Frame):
         reps_df = pd.DataFrame(rep_rows)
 
         xlsx_path = os.path.join(self.output_dir, "results.xlsx")
-        save_excel({"cluster_summary": summary, "representatives": reps_df}, xlsx_path)
+
+        sheets = {"cluster_summary": summary, "representatives": reps_df}
+
+        if hasattr(self, "asin_pivot") and self.asin_pivot is not None:
+            sheets["asin_cluster_percent"] = self.asin_pivot.reset_index()
+
+        if hasattr(self, "priority_df") and self.priority_df is not None:
+            sheets["cluster_priority"] = self.priority_df
+
+        save_excel(sheets, xlsx_path)
+
 
         messagebox.showinfo("导出完成", f"已导出：\n- {detail_path}\n- {xlsx_path}")
