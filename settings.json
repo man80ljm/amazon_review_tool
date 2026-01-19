@@ -1,0 +1,12 @@
+{
+  "text_language": "en",
+  "aihubmix_base_url": "",
+  "aihubmix_api_key": null,
+  "aihubmix_default_model": "",
+  "negative_mode": "FUSION",
+  "star_negative_threshold": 3.0,
+  "sentiment_conf_threshold": 0.75,
+  "fusion_w_star": 1.0,
+  "fusion_w_sent": 1.0,
+  "fusion_keep_threshold": 1.5
+}
