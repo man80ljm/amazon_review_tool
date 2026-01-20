@@ -1634,9 +1634,8 @@ class App(ttk.Frame):
             "aihubmix_default_model": getattr(self.cfg, "aihubmix_default_model", ""),
         })
 
-        self._log(f"? text_language set to: {self.cfg.text_language}")
-        messagebox.showinfo("???", f"?????????{self.cfg.text_language}
-??????????")
+        self._log(f"✅ text_language set to: {self.cfg.text_language}")
+        messagebox.showinfo("已保存", f"文本语言已切换为：{self.cfg.text_language}\n下次打开会自动记住。")
 
     def on_sentiment_model_changed(self, event=None):
         label = self.sentiment_model_var.get().strip()
@@ -1644,9 +1643,8 @@ class App(ttk.Frame):
         if not key:
             return
         self._apply_sentiment_model_key(key, save=True)
-        self._log(f"? sentiment_model_key set to: {key}")
-        messagebox.showinfo("???", f"?????????{label}
-??????????")
+        self._log(f"✅ sentiment_model_key set to: {key}")
+        messagebox.showinfo("已保存", f"情感模型已切换为：{label}\n下次打开会自动记住。")
 
     def on_negative_mode_changed(self, event=None):
         """
