@@ -161,6 +161,8 @@ class App(ttk.Frame):
         self.data_text.pack(fill="both", expand=True)
 
         # K scan
+        self.k_recommend_var = tk.StringVar(value="Recommended K: -")
+        ttk.Label(self.tab_k, textvariable=self.k_recommend_var).pack(anchor="w", padx=6, pady=(6, 0))
         self.k_text = tk.Text(self.tab_k, height=18, wrap="none")
         self.k_text.pack(fill="both", expand=True)
 
@@ -892,11 +894,17 @@ class App(ttk.Frame):
         score = self.k_scan.k_to_silhouette.get(rec.best_k, float("nan"))
         ch_score = self.k_scan.k_to_calinski_harabasz.get(rec.best_k, float("nan"))
         db_score = self.k_scan.k_to_davies_bouldin.get(rec.best_k, float("nan"))
+        recommend_text = (
+            f"Recommended K: {self.k_best} "
+            f"(method={rec.method}, silhouette={score:.4f}, "
+            f"calinski_harabasz={ch_score:.2f}, davies_bouldin={db_score:.4f})"
+        )
         self._log(
             "Recommended K = "
             f"{self.k_best} (method={rec.method}, silhouette={score:.4f}, "
             f"calinski_harabasz={ch_score:.2f}, davies_bouldin={db_score:.4f})"
         )
+        self._ui(lambda: self.k_recommend_var.set(recommend_text))
 
         # 你原来会渲染 K 扫描结果（注意：此函数内部必须线程安全）
         try:
