@@ -67,17 +67,20 @@ class App(ttk.Frame):
         self.output_dir = os.path.join(os.getcwd(), "outputs")
         ensure_dir(self.output_dir)
 
-        self._build_ui()
-        self.log_queue = queue.Queue()
-        self._start_log_pump()
-        self._log("App started. Ready.")
-        self._job_lock = threading.Lock()
-        self._running = False
-
         # ====== graceful shutdown support ======
         self._threads = []         # 用来保存后台线程（daemon=False）
         self._closing = False      # 退出标记
         self._log_pump_id = None   # after 句柄（用于 cancel）
+        self._ui_pump_id = None    # after 句柄（用于 cancel）
+
+        self._build_ui()
+        self.log_queue = queue.Queue()
+        self.ui_queue = queue.Queue()
+        self._start_log_pump()
+        self._start_ui_pump()
+        self._log("App started. Ready.")
+        self._job_lock = threading.Lock()
+        self._running = False
         
         # 🔥 关键：绑定窗口关闭事件
         self.master.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -335,6 +338,32 @@ class App(ttk.Frame):
 
         pump()
 
+    def _start_ui_pump(self):
+        """在主线程执行 UI 队列中的任务，避免跨线程调用 Tk。"""
+        import queue
+
+        def pump():
+            if getattr(self, "_closing", False):
+                return
+
+            try:
+                while True:
+                    fn, args, kwargs = self.ui_queue.get_nowait()
+                    try:
+                        fn(*args, **kwargs)
+                    except Exception:
+                        pass  # 单个 UI 任务失败不影响后续
+            except queue.Empty:
+                pass
+
+            if not getattr(self, "_closing", False):
+                try:
+                    self._ui_pump_id = self.after(80, pump)
+                except Exception:
+                    pass  # 窗口已销毁
+
+        pump()
+
     def _log(self, msg: str):
         """线程安全日志：后台线程也可以调用。"""
         try:
@@ -352,7 +381,7 @@ class App(ttk.Frame):
         if getattr(self, "_closing", False):
             return
         try:
-            self.master.after(0, lambda: fn(*args, **kwargs))
+            self.ui_queue.put((fn, args, kwargs))
         except Exception:
             pass
 
@@ -458,13 +487,7 @@ class App(ttk.Frame):
             return
 
         def ui(callable_):
-            # 如果正在关闭，不再触发 UI 更新
-            if getattr(self, "_closing", False):
-                return
-            try:
-                self.master.after(0, callable_)
-            except Exception:
-                pass  # 窗口已销毁，忽略
+            self._ui(callable_)
 
         def runner():
             try:
@@ -1747,6 +1770,14 @@ class App(ttk.Frame):
             if hasattr(self, "_log_pump_id") and self._log_pump_id is not None:
                 self.after_cancel(self._log_pump_id)
                 self._log_pump_id = None
+        except Exception:
+            pass
+
+        # 1.1) 停止 UI pump
+        try:
+            if hasattr(self, "_ui_pump_id") and self._ui_pump_id is not None:
+                self.after_cancel(self._ui_pump_id)
+                self._ui_pump_id = None
         except Exception:
             pass
 
