@@ -1624,7 +1624,7 @@ class App(ttk.Frame):
         key = getattr(self.cfg, "sentiment_model_key", "")
         rel_path = model_map.get(key, getattr(self.cfg, "sentiment_model", ""))
 
-        # ????? settings.json
+        # Save to settings.json
         save_user_settings({
             "text_language": self.cfg.text_language,
             "sentiment_model_key": key,
@@ -1634,8 +1634,8 @@ class App(ttk.Frame):
             "aihubmix_default_model": getattr(self.cfg, "aihubmix_default_model", ""),
         })
 
-        self._log(f"✅ text_language set to: {self.cfg.text_language}")
-        messagebox.showinfo("已保存", f"文本语言已切换为：{self.cfg.text_language}\n下次打开会自动记住。")
+        self._log(f"OK text_language set to: {self.cfg.text_language}")
+        messagebox.showinfo("Saved", f"Text language set to: {self.cfg.text_language}\nWill be remembered next time.")
 
     def on_sentiment_model_changed(self, event=None):
         label = self.sentiment_model_var.get().strip()
@@ -1643,8 +1643,8 @@ class App(ttk.Frame):
         if not key:
             return
         self._apply_sentiment_model_key(key, save=True)
-        self._log(f"✅ sentiment_model_key set to: {key}")
-        messagebox.showinfo("已保存", f"情感模型已切换为：{label}\n下次打开会自动记住。")
+        self._log(f"OK sentiment_model_key set to: {key}")
+        messagebox.showinfo("Saved", f"Sentiment model set to: {label}\nWill be remembered next time.")
 
     def on_negative_mode_changed(self, event=None):
         """
