@@ -349,6 +349,8 @@ class App(ttk.Frame):
 
     def _ui(self, fn, *args, **kwargs):
         """保证 UI 操作在主线程执行"""
+        if getattr(self, "_closing", False):
+            return
         try:
             self.master.after(0, lambda: fn(*args, **kwargs))
         except Exception:
