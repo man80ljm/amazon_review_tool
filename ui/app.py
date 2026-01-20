@@ -67,17 +67,20 @@ class App(ttk.Frame):
         self.output_dir = os.path.join(os.getcwd(), "outputs")
         ensure_dir(self.output_dir)
 
-        self._build_ui()
-        self.log_queue = queue.Queue()
-        self._start_log_pump()
-        self._log("App started. Ready.")
-        self._job_lock = threading.Lock()
-        self._running = False
-
         # ====== graceful shutdown support ======
         self._threads = []         # 用来保存后台线程（daemon=False）
         self._closing = False      # 退出标记
         self._log_pump_id = None   # after 句柄（用于 cancel）
+        self._ui_pump_id = None    # after 句柄（用于 cancel）
+
+        self._build_ui()
+        self.log_queue = queue.Queue()
+        self.ui_queue = queue.Queue()
+        self._start_log_pump()
+        self._start_ui_pump()
+        self._log("App started. Ready.")
+        self._job_lock = threading.Lock()
+        self._running = False
         
         # 🔥 关键：绑定窗口关闭事件
         self.master.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -161,6 +164,8 @@ class App(ttk.Frame):
         self.data_text.pack(fill="both", expand=True)
 
         # K scan
+        self.k_recommend_var = tk.StringVar(value="Recommended K: -")
+        ttk.Label(self.tab_k, textvariable=self.k_recommend_var).pack(anchor="w", padx=6, pady=(6, 0))
         self.k_text = tk.Text(self.tab_k, height=18, wrap="none")
         self.k_text.pack(fill="both", expand=True)
 
@@ -333,6 +338,32 @@ class App(ttk.Frame):
 
         pump()
 
+    def _start_ui_pump(self):
+        """在主线程执行 UI 队列中的任务，避免跨线程调用 Tk。"""
+        import queue
+
+        def pump():
+            if getattr(self, "_closing", False):
+                return
+
+            try:
+                while True:
+                    fn, args, kwargs = self.ui_queue.get_nowait()
+                    try:
+                        fn(*args, **kwargs)
+                    except Exception:
+                        pass  # 单个 UI 任务失败不影响后续
+            except queue.Empty:
+                pass
+
+            if not getattr(self, "_closing", False):
+                try:
+                    self._ui_pump_id = self.after(80, pump)
+                except Exception:
+                    pass  # 窗口已销毁
+
+        pump()
+
     def _log(self, msg: str):
         """线程安全日志：后台线程也可以调用。"""
         try:
@@ -347,8 +378,10 @@ class App(ttk.Frame):
 
     def _ui(self, fn, *args, **kwargs):
         """保证 UI 操作在主线程执行"""
+        if getattr(self, "_closing", False):
+            return
         try:
-            self.master.after(0, lambda: fn(*args, **kwargs))
+            self.ui_queue.put((fn, args, kwargs))
         except Exception:
             pass
 
@@ -454,13 +487,7 @@ class App(ttk.Frame):
             return
 
         def ui(callable_):
-            # 如果正在关闭，不再触发 UI 更新
-            if getattr(self, "_closing", False):
-                return
-            try:
-                self.master.after(0, callable_)
-            except Exception:
-                pass  # 窗口已销毁，忽略
+            self._ui(callable_)
 
         def runner():
             try:
@@ -882,10 +909,27 @@ class App(ttk.Frame):
         )
         self._log(f"K scan done. range=[{self.cfg.k_min},{self.cfg.k_max}]")
 
-        rec = recommend_k(self.k_scan.k_to_silhouette)
+        rec = recommend_k(
+            self.k_scan.k_to_inertia,
+            self.k_scan.k_to_silhouette,
+            self.k_scan.k_to_calinski_harabasz,
+            self.k_scan.k_to_davies_bouldin,
+        )
         self.k_best = int(rec.best_k)
         score = self.k_scan.k_to_silhouette.get(rec.best_k, float("nan"))
-        self._log(f"Recommended K by silhouette = {self.k_best} (score={score:.4f})")
+        ch_score = self.k_scan.k_to_calinski_harabasz.get(rec.best_k, float("nan"))
+        db_score = self.k_scan.k_to_davies_bouldin.get(rec.best_k, float("nan"))
+        recommend_text = (
+            f"Recommended K: {self.k_best} "
+            f"(method={rec.method}, silhouette={score:.4f}, "
+            f"calinski_harabasz={ch_score:.2f}, davies_bouldin={db_score:.4f})"
+        )
+        self._log(
+            "Recommended K = "
+            f"{self.k_best} (method={rec.method}, silhouette={score:.4f}, "
+            f"calinski_harabasz={ch_score:.2f}, davies_bouldin={db_score:.4f})"
+        )
+        self._ui(lambda: self.k_recommend_var.set(recommend_text))
 
         # 你原来会渲染 K 扫描结果（注意：此函数内部必须线程安全）
         try:
@@ -1051,11 +1095,16 @@ class App(ttk.Frame):
 
     def _render_k_scan(self):
         self.k_text.delete("1.0", "end")
-        self.k_text.insert("end", "k\tinertia(SSE)\tsilhouette\n")
+        self.k_text.insert("end", "k\tinertia(SSE)\tsilhouette\tcalinski_harabasz\tdavies_bouldin\n")
         for k in range(self.cfg.k_min, self.cfg.k_max + 1):
             sse = self.k_scan.k_to_inertia.get(k, None)
             sil = self.k_scan.k_to_silhouette.get(k, None)
-            self.k_text.insert("end", f"{k}\t{(sse or 0):.2f}\t\t{(sil or 0):.4f}\n")
+            ch = self.k_scan.k_to_calinski_harabasz.get(k, None)
+            db = self.k_scan.k_to_davies_bouldin.get(k, None)
+            self.k_text.insert(
+                "end",
+                f"{k}\t{(sse or 0):.2f}\t\t{(sil or 0):.4f}\t\t{(ch or 0):.2f}\t\t{(db or 0):.4f}\n"
+            )
 
     def _render_results(self, stability: dict):
         self.res_text.delete("1.0", "end")
@@ -1089,7 +1138,12 @@ class App(ttk.Frame):
             messagebox.showwarning("提示", "请先运行全流程（至少跑到选K扫描）")
             return
 
-        rec = recommend_k(self.k_scan.k_to_silhouette)
+        rec = recommend_k(
+            self.k_scan.k_to_inertia,
+            self.k_scan.k_to_silhouette,
+            self.k_scan.k_to_calinski_harabasz,
+            self.k_scan.k_to_davies_bouldin,
+        )
         best_k = int(rec.best_k)
 
         png_path = os.path.join(self.output_dir, "k_selection.png")
@@ -1500,7 +1554,12 @@ class App(ttk.Frame):
             attr_share_png = os.path.join(self.output_dir, "asin_attribute_share.png")
             attr_pain_png  = os.path.join(self.output_dir, "asin_attribute_pain.png")
 
-            rec = recommend_k(self.k_scan.k_to_silhouette)
+            rec = recommend_k(
+                self.k_scan.k_to_inertia,
+                self.k_scan.k_to_silhouette,
+                self.k_scan.k_to_calinski_harabasz,
+                self.k_scan.k_to_davies_bouldin,
+            )
 
             out_path = build_offline_report(
                 cfg=self.cfg,
@@ -1509,6 +1568,8 @@ class App(ttk.Frame):
                 df_work=self.df_work,    # 用于聚类的那份
                 k_to_inertia=self.k_scan.k_to_inertia,
                 k_to_silhouette=self.k_scan.k_to_silhouette,
+                k_to_calinski_harabasz=self.k_scan.k_to_calinski_harabasz,
+                k_to_davies_bouldin=self.k_scan.k_to_davies_bouldin,
                 k_best=int(rec.best_k),
                 cluster_summary=summary,
                 reps_df=reps_df,
@@ -1709,6 +1770,14 @@ class App(ttk.Frame):
             if hasattr(self, "_log_pump_id") and self._log_pump_id is not None:
                 self.after_cancel(self._log_pump_id)
                 self._log_pump_id = None
+        except Exception:
+            pass
+
+        # 1.1) 停止 UI pump
+        try:
+            if hasattr(self, "_ui_pump_id") and self._ui_pump_id is not None:
+                self.after_cancel(self._ui_pump_id)
+                self._ui_pump_id = None
         except Exception:
             pass
 

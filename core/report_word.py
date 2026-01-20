@@ -331,22 +331,33 @@ def _add_sentiment_distribution(doc: Document, df_all: pd.DataFrame):
     doc.add_paragraph(str(vc))
 
 
-def _add_k_table(doc: Document, k_to_inertia: Dict[int, float], k_to_sil: Dict[int, float], k_best: int):
-    doc.add_heading("K Selection (Elbow + Silhouette) / K选择", level=2)
+def _add_k_table(
+    doc: Document,
+    k_to_inertia: Dict[int, float],
+    k_to_sil: Dict[int, float],
+    k_to_ch: Dict[int, float],
+    k_to_db: Dict[int, float],
+    k_best: int,
+):
+    doc.add_heading("K Selection (Elbow + Multi-metric) / K选择", level=2)
     doc.add_paragraph(f"Recommended K = {k_best}")
 
-    table = doc.add_table(rows=1, cols=3)
+    table = doc.add_table(rows=1, cols=5)
     hdr = table.rows[0].cells
     hdr[0].text = "K"
     hdr[1].text = "Inertia(SSE)"
     hdr[2].text = "Silhouette"
+    hdr[3].text = "Calinski-Harabasz"
+    hdr[4].text = "Davies-Bouldin"
 
-    ks = sorted(set(list(k_to_inertia.keys()) + list(k_to_sil.keys())))
+    ks = sorted(set(list(k_to_inertia.keys()) + list(k_to_sil.keys()) + list(k_to_ch.keys()) + list(k_to_db.keys())))
     for k in ks:
         row = table.add_row().cells
         row[0].text = f"{k}{' (best)' if int(k) == int(k_best) else ''}"
         row[1].text = f"{float(k_to_inertia.get(k, 0.0)):.2f}"
         row[2].text = f"{float(k_to_sil.get(k, 0.0)):.4f}"
+        row[3].text = f"{float(k_to_ch.get(k, 0.0)):.2f}"
+        row[4].text = f"{float(k_to_db.get(k, 0.0)):.4f}"
 
 
 def _add_cluster_summary(doc: Document, summary_df: Optional[pd.DataFrame]):
@@ -556,6 +567,8 @@ def build_offline_report(
     df_work: pd.DataFrame,
     k_to_inertia: Dict[int, float],
     k_to_silhouette: Dict[int, float],
+    k_to_calinski_harabasz: Dict[int, float],
+    k_to_davies_bouldin: Dict[int, float],
     k_best: int,
     cluster_summary: Optional[pd.DataFrame],
     reps_df: Optional[pd.DataFrame],
@@ -603,7 +616,14 @@ def build_offline_report(
     _add_sentiment_distribution(doc, df_all)
 
     # K selection
-    _add_k_table(doc, k_to_inertia or {}, k_to_silhouette or {}, int(k_best))
+    _add_k_table(
+        doc,
+        k_to_inertia or {},
+        k_to_silhouette or {},
+        k_to_calinski_harabasz or {},
+        k_to_davies_bouldin or {},
+        int(k_best),
+    )
 
     if _safe_exists(k_plot_png):
         doc.add_paragraph("Legend:")
