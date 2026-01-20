@@ -882,10 +882,21 @@ class App(ttk.Frame):
         )
         self._log(f"K scan done. range=[{self.cfg.k_min},{self.cfg.k_max}]")
 
-        rec = recommend_k(self.k_scan.k_to_silhouette)
+        rec = recommend_k(
+            self.k_scan.k_to_inertia,
+            self.k_scan.k_to_silhouette,
+            self.k_scan.k_to_calinski_harabasz,
+            self.k_scan.k_to_davies_bouldin,
+        )
         self.k_best = int(rec.best_k)
         score = self.k_scan.k_to_silhouette.get(rec.best_k, float("nan"))
-        self._log(f"Recommended K by silhouette = {self.k_best} (score={score:.4f})")
+        ch_score = self.k_scan.k_to_calinski_harabasz.get(rec.best_k, float("nan"))
+        db_score = self.k_scan.k_to_davies_bouldin.get(rec.best_k, float("nan"))
+        self._log(
+            "Recommended K = "
+            f"{self.k_best} (method={rec.method}, silhouette={score:.4f}, "
+            f"calinski_harabasz={ch_score:.2f}, davies_bouldin={db_score:.4f})"
+        )
 
         # 你原来会渲染 K 扫描结果（注意：此函数内部必须线程安全）
         try:
@@ -1051,11 +1062,16 @@ class App(ttk.Frame):
 
     def _render_k_scan(self):
         self.k_text.delete("1.0", "end")
-        self.k_text.insert("end", "k\tinertia(SSE)\tsilhouette\n")
+        self.k_text.insert("end", "k\tinertia(SSE)\tsilhouette\tcalinski_harabasz\tdavies_bouldin\n")
         for k in range(self.cfg.k_min, self.cfg.k_max + 1):
             sse = self.k_scan.k_to_inertia.get(k, None)
             sil = self.k_scan.k_to_silhouette.get(k, None)
-            self.k_text.insert("end", f"{k}\t{(sse or 0):.2f}\t\t{(sil or 0):.4f}\n")
+            ch = self.k_scan.k_to_calinski_harabasz.get(k, None)
+            db = self.k_scan.k_to_davies_bouldin.get(k, None)
+            self.k_text.insert(
+                "end",
+                f"{k}\t{(sse or 0):.2f}\t\t{(sil or 0):.4f}\t\t{(ch or 0):.2f}\t\t{(db or 0):.4f}\n"
+            )
 
     def _render_results(self, stability: dict):
         self.res_text.delete("1.0", "end")
@@ -1089,7 +1105,12 @@ class App(ttk.Frame):
             messagebox.showwarning("提示", "请先运行全流程（至少跑到选K扫描）")
             return
 
-        rec = recommend_k(self.k_scan.k_to_silhouette)
+        rec = recommend_k(
+            self.k_scan.k_to_inertia,
+            self.k_scan.k_to_silhouette,
+            self.k_scan.k_to_calinski_harabasz,
+            self.k_scan.k_to_davies_bouldin,
+        )
         best_k = int(rec.best_k)
 
         png_path = os.path.join(self.output_dir, "k_selection.png")
@@ -1500,7 +1521,12 @@ class App(ttk.Frame):
             attr_share_png = os.path.join(self.output_dir, "asin_attribute_share.png")
             attr_pain_png  = os.path.join(self.output_dir, "asin_attribute_pain.png")
 
-            rec = recommend_k(self.k_scan.k_to_silhouette)
+            rec = recommend_k(
+                self.k_scan.k_to_inertia,
+                self.k_scan.k_to_silhouette,
+                self.k_scan.k_to_calinski_harabasz,
+                self.k_scan.k_to_davies_bouldin,
+            )
 
             out_path = build_offline_report(
                 cfg=self.cfg,
@@ -1509,6 +1535,8 @@ class App(ttk.Frame):
                 df_work=self.df_work,    # 用于聚类的那份
                 k_to_inertia=self.k_scan.k_to_inertia,
                 k_to_silhouette=self.k_scan.k_to_silhouette,
+                k_to_calinski_harabasz=self.k_scan.k_to_calinski_harabasz,
+                k_to_davies_bouldin=self.k_scan.k_to_davies_bouldin,
                 k_best=int(rec.best_k),
                 cluster_summary=summary,
                 reps_df=reps_df,

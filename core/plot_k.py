@@ -9,9 +9,74 @@ class KRecommend:
     best_k: int
     method: str
 
-def recommend_k(k_to_silhouette: Dict[int, float]) -> KRecommend:
-    best_k = max(k_to_silhouette, key=lambda k: k_to_silhouette[k])
-    return KRecommend(best_k=best_k, method="silhouette_max")
+def _recommend_by_elbow(k_to_inertia: Dict[int, float]) -> int:
+    ks = sorted(k_to_inertia.keys())
+    if len(ks) < 3:
+        return ks[0]
+    inertia = np.array([k_to_inertia[k] for k in ks], dtype=float)
+    inertia = np.clip(inertia, 1e-9, None)
+    log_inertia = np.log(inertia)
+    curvatures = []
+    for i in range(1, len(ks) - 1):
+        curvature = abs(log_inertia[i - 1] - 2 * log_inertia[i] + log_inertia[i + 1])
+        curvatures.append(curvature)
+    best_idx = int(np.argmax(curvatures)) + 1
+    return ks[best_idx]
+
+def _normalize_scores(scores: Dict[int, float], higher_better: bool) -> Dict[int, float]:
+    values = np.array([v for v in scores.values() if np.isfinite(v)], dtype=float)
+    if len(values) == 0:
+        return {k: 0.0 for k in scores.keys()}
+    v_min = float(values.min())
+    v_max = float(values.max())
+    if np.isclose(v_min, v_max):
+        return {k: 0.5 for k in scores.keys()}
+    norm = {}
+    for k, v in scores.items():
+        if not np.isfinite(v):
+            norm[k] = 0.0
+            continue
+        scaled = (v - v_min) / (v_max - v_min)
+        norm[k] = float(scaled if higher_better else (1.0 - scaled))
+    return norm
+
+def recommend_k(
+    k_to_inertia: Dict[int, float],
+    k_to_silhouette: Dict[int, float],
+    k_to_calinski_harabasz: Dict[int, float],
+    k_to_davies_bouldin: Dict[int, float],
+) -> KRecommend:
+    candidates = {}
+    if k_to_silhouette:
+        candidates["silhouette_max"] = max(k_to_silhouette, key=lambda k: k_to_silhouette[k])
+    if k_to_calinski_harabasz:
+        candidates["calinski_harabasz_max"] = max(k_to_calinski_harabasz, key=lambda k: k_to_calinski_harabasz[k])
+    if k_to_davies_bouldin:
+        candidates["davies_bouldin_min"] = min(k_to_davies_bouldin, key=lambda k: k_to_davies_bouldin[k])
+    if k_to_inertia:
+        candidates["elbow_curvature"] = _recommend_by_elbow(k_to_inertia)
+
+    vote_counts = {}
+    for k in candidates.values():
+        vote_counts[k] = vote_counts.get(k, 0) + 1
+
+    sil_norm = _normalize_scores(k_to_silhouette, higher_better=True)
+    ch_norm = _normalize_scores(k_to_calinski_harabasz, higher_better=True)
+    db_norm = _normalize_scores(k_to_davies_bouldin, higher_better=False)
+
+    def composite_score(k: int) -> float:
+        return sil_norm.get(k, 0.0) + ch_norm.get(k, 0.0) + db_norm.get(k, 0.0)
+
+    if vote_counts:
+        max_votes = max(vote_counts.values())
+        top_k = [k for k, v in vote_counts.items() if v == max_votes]
+        best_k = max(top_k, key=composite_score)
+        method = "vote:" + ",".join(sorted([m for m, k in candidates.items() if k == best_k]))
+    else:
+        best_k = max(k_to_silhouette, key=lambda k: k_to_silhouette[k])
+        method = "silhouette_max"
+
+    return KRecommend(best_k=best_k, method=method)
 
 def plot_k_curves(
     k_to_inertia: Dict[int, float],
