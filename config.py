@@ -72,6 +72,14 @@ class AppConfig:
     sentiment_model: Optional[str] = "models/sentiment"
     sentiment_batch_size: int = 16
     sentiment_max_chars: int = 1200
+    sentiment_model_key: str = "en_sst2"
+    sentiment_model_map: Dict[str, str] = field(default_factory=lambda: {
+        "en_sst2": "models/sentiment/en_sst2",
+        "zh_dianping": "models/sentiment/zh_dianping",
+        "zh_general": "models/sentiment/zh_general",
+        "zh_chinanews": "models/sentiment/zh_chinanews",
+        "zh_jd_binary": "models/sentiment/zh_jd_binary",
+    })
 
     # 负面筛选策略
     negative_mode: str = "STAR_ONLY"
@@ -145,6 +153,21 @@ class AppConfig:
         # sentiment_model 允许为空，但不要让它变成非字符串
         if self.sentiment_model is not None and not isinstance(self.sentiment_model, str):
             self.sentiment_model = "models/sentiment"
+
+        # sentiment_model_key / sentiment_model sync
+        model_map = getattr(self, "sentiment_model_map", {}) or {}
+        if isinstance(model_map, dict) and model_map:
+            # Derive key if sentiment_model matches a known path
+            for k, p in model_map.items():
+                if self.sentiment_model and os.path.normpath(str(self.sentiment_model)) == os.path.normpath(p):
+                    self.sentiment_model_key = k
+                    break
+
+            # Apply mapped path when key is known
+            if self.sentiment_model_key in model_map:
+                mapped = model_map[self.sentiment_model_key]
+                if self.sentiment_model in (None, "", "models/sentiment") or self.sentiment_model == mapped:
+                    self.sentiment_model = mapped
 
     def to_dict(self) -> Dict[str, Any]:
         """方便保存配置"""

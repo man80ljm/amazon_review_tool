@@ -1,26 +1,26 @@
 import os
 from pathlib import Path
+from typing import Dict, Iterable, List, Tuple
 
 
-def download_sentence_transformer(model_id: str, out_dir: str):
-    """下载并用 sentence-transformers 的 save() 落地（保证目录结构可被 SentenceTransformer 直接加载）"""
+def download_sentence_transformer(model_id: str, out_dir: str) -> None:
+    """Download and save a sentence-transformers model for offline usage."""
     from sentence_transformers import SentenceTransformer
 
     out_dir = os.path.abspath(out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
     print(f"[Embedding] Downloading ST model: {model_id}")
-    model = SentenceTransformer(model_id)   # 需要联网
+    model = SentenceTransformer(model_id)
     model.save(out_dir)
     print(f"[Embedding] Saved to: {out_dir}")
 
 
-def download_hf_sentiment(model_id: str, out_dir: str):
+def download_hf_sentiment(model_id: str, out_dir: str) -> None:
     """
-    下载 HuggingFace Transformers 的情感模型并落地到本地目录：
-    - 保存 tokenizer
-    - 保存 model
-    之后你可以用 from_pretrained(out_dir) 离线加载
+    Download a HF Transformers sentiment model to local dir:
+    - tokenizer
+    - model
     """
     from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
@@ -36,24 +36,115 @@ def download_hf_sentiment(model_id: str, out_dir: str):
     print(f"[Sentiment] Saved to: {out_dir}")
 
 
-def main():
+# Sentiment model catalog. Add more entries as needed.
+# Key -> {id, lang}
+SENTIMENT_CATALOG: Dict[str, Dict[str, str]] = {
+    # English (SST-2)
+    "en_sst2": {"id": "distilbert-base-uncased-finetuned-sst-2-english", "lang": "en"},
+    # Chinese (JD reviews)
+    "zh_jd_binary": {"id": "uer/roberta-base-finetuned-jd-binary-chinese", "lang": "zh"},
+    # Chinese (Dianping reviews)
+    "zh_dianping": {"id": "uer/roberta-base-finetuned-dianping-chinese", "lang": "zh"},
+    # Chinese (General fallback)
+    "zh_general": {"id": "IDEA-CCNL/Erlangshen-Roberta-110M-Sentiment", "lang": "zh"},
+    # Chinese (News sentiment, alternative fallback)
+    "zh_chinanews": {"id": "uer/roberta-base-finetuned-chinanews-chinese", "lang": "zh"},
+}
+
+
+def _safe_dirname(name: str) -> str:
+    return name.replace("/", "--").replace("\\", "--").replace(":", "--")
+
+
+def _parse_kv_list(items: Iterable[str]) -> List[Tuple[str, str]]:
+    pairs: List[Tuple[str, str]] = []
+    for item in items:
+        if "=" not in item:
+            raise ValueError(f"Invalid format (expected key=id): {item}")
+        key, model_id = item.split("=", 1)
+        key = key.strip()
+        model_id = model_id.strip()
+        if not key or not model_id:
+            raise ValueError(f"Invalid key/id in: {item}")
+        pairs.append((key, model_id))
+    return pairs
+
+
+def resolve_sentiment_models(selection: str, extra_models: Iterable[str]) -> List[Tuple[str, str]]:
+    resolved: List[Tuple[str, str]] = []
+
+    if selection not in {"en", "zh", "all"}:
+        raise ValueError(f"Unsupported sentiment set: {selection}")
+
+    for key, meta in SENTIMENT_CATALOG.items():
+        if selection == "all" or meta["lang"] == selection:
+            resolved.append((key, meta["id"]))
+
+    resolved.extend(_parse_kv_list(extra_models))
+    return resolved
+
+
+def _should_skip_download(out_dir: str, skip_existing: bool) -> bool:
+    if not skip_existing:
+        return False
+    if not os.path.isdir(out_dir):
+        return False
+    return any(os.scandir(out_dir))
+
+
+def build_parser():
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Download embedding + sentiment models for offline usage.",
+    )
+    parser.add_argument(
+        "--embedding-id",
+        default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        help="Override embedding model id.",
+    )
+    parser.add_argument(
+        "--sentiment-set",
+        choices=["en", "zh", "all"],
+        default="all",
+        help="Which sentiment model set to download (default: all).",
+    )
+    parser.add_argument(
+        "--sentiment-model",
+        action="append",
+        default=[],
+        help="Extra sentiment model in key=id format. Can be repeated.",
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip download when target folder already has files.",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
     project_root = Path(__file__).resolve().parent
     emb_dir = project_root / "models" / "embedding"
-    sent_dir = project_root / "models" / "sentiment"
+    sent_root = project_root / "models" / "sentiment"
 
-    # ✅ 推荐：中英都能用的 embedding（你现在分析中文点评，必须用多语种 embedding 才合理）
-    embedding_id = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-
-    # ✅ 情感模型：先给你一个“英文情感”稳定的（你如果要中文情感我再给你换）
-    # 英文推荐：
-    sentiment_id = "distilbert-base-uncased-finetuned-sst-2-english"
+    embedding_id = args.embedding_id
+    sentiment_models = resolve_sentiment_models(args.sentiment_set, args.sentiment_model)
 
     download_sentence_transformer(embedding_id, str(emb_dir))
-    download_hf_sentiment(sentiment_id, str(sent_dir))
+    for key, model_id in sentiment_models:
+        out_dir = sent_root / _safe_dirname(key)
+        if _should_skip_download(str(out_dir), args.skip_existing):
+            print(f"[Sentiment] Skipped (exists): {out_dir}")
+            continue
+        download_hf_sentiment(model_id, str(out_dir))
 
-    print("\n✅ All done.")
+    print("\nAll done.")
     print(f"Embedding dir : {emb_dir}")
-    print(f"Sentiment dir : {sent_dir}")
+    print(f"Sentiment root: {sent_root}")
 
 
 if __name__ == "__main__":

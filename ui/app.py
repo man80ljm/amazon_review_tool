@@ -47,9 +47,12 @@ class App(ttk.Frame):
 
         #打包后加载模型路径修正
         from config import resolve_path
+        self._resolve_path = resolve_path
 
         self.cfg.sentiment_model = resolve_path(getattr(self.cfg, "sentiment_model", "models/sentiment"))
         self.cfg.embedding_model = resolve_path(getattr(self.cfg, "embedding_model", "models/embedding"))
+        self.sentiment_model_label_to_key = {}
+        self.sentiment_model_key_to_label = {}
 
         
         # 设置清华镜像
@@ -131,6 +134,22 @@ class App(ttk.Frame):
         )
         self.lang_box.pack(side="left", padx=(6, 12))
         self.lang_box.bind("<<ComboboxSelected>>", self.on_language_changed)
+
+        # 情感模型选择
+        ttk.Label(row2, text="情感模型:").pack(side="left")
+        self.sentiment_model_var = tk.StringVar(value="")
+        self.sentiment_model_box = ttk.Combobox(
+            row2,
+            textvariable=self.sentiment_model_var,
+            values=[],
+            width=20,
+            state="readonly"
+        )
+        self.sentiment_model_box.pack(side="left", padx=(6, 12))
+        self.sentiment_model_box.bind("<<ComboboxSelected>>", self.on_sentiment_model_changed)
+
+        current_key = self._derive_sentiment_key_from_cfg()
+        self._refresh_sentiment_model_options(self.cfg.text_language, select_key=current_key, save=False)
 
         # 离线报告按钮
         self.btn_report_offline = ttk.Button(row2, text="生成Word报告（离线）", command=self.on_report_offline)
@@ -1531,19 +1550,103 @@ class App(ttk.Frame):
 
         self._run_in_thread(job, "Generating offline Word report...")
 
+    def _lang_bucket(self, lang: str) -> str:
+        if not lang:
+            return "en"
+        return "zh" if lang.lower().startswith("zh") else "en"
+
+    def _sentiment_options_for_lang(self, lang: str):
+        if self._lang_bucket(lang) == "zh":
+            return [
+                ("zh_dianping", "??-????"),
+                ("zh_general", "??-??"),
+                ("zh_chinanews", "??-??"),
+                ("zh_jd_binary", "??-??"),
+            ]
+        return [("en_sst2", "English-SST2")]
+
+    def _recommended_sentiment_key(self, lang: str) -> str:
+        return "zh_dianping" if self._lang_bucket(lang) == "zh" else "en_sst2"
+
+    def _derive_sentiment_key_from_cfg(self) -> str:
+        key = getattr(self.cfg, "sentiment_model_key", "") or ""
+        if key:
+            return key
+        model_map = getattr(self.cfg, "sentiment_model_map", {}) or {}
+        current = getattr(self.cfg, "sentiment_model", "") or ""
+        if not current or not model_map:
+            return ""
+        for k, p in model_map.items():
+            expected = self._resolve_path(p) if hasattr(self, "_resolve_path") else p
+            if os.path.normpath(str(current)) == os.path.normpath(str(expected)):
+                return k
+        return ""
+
+    def _apply_sentiment_model_key(self, key: str, save: bool) -> None:
+        model_map = getattr(self.cfg, "sentiment_model_map", {}) or {}
+        rel_path = model_map.get(key, "")
+        self.cfg.sentiment_model_key = key
+        if rel_path:
+            self.cfg.sentiment_model = self._resolve_path(rel_path) if hasattr(self, "_resolve_path") else rel_path
+
+        if save:
+            save_user_settings({
+                "sentiment_model_key": key,
+                "sentiment_model": rel_path or getattr(self.cfg, "sentiment_model", None),
+            })
+
+    def _refresh_sentiment_model_options(self, lang: str, select_key: str | None = None, save: bool = False) -> None:
+        options = self._sentiment_options_for_lang(lang)
+        self.sentiment_model_label_to_key = {label: key for key, label in options}
+        self.sentiment_model_key_to_label = {key: label for key, label in options}
+        self.sentiment_model_box["values"] = [label for _, label in options]
+
+        key = select_key or ""
+        if key not in self.sentiment_model_key_to_label:
+            key = self._recommended_sentiment_key(lang)
+            if key not in self.sentiment_model_key_to_label and options:
+                key = options[0][0]
+
+        label = self.sentiment_model_key_to_label.get(key, "")
+        if label:
+            self.sentiment_model_var.set(label)
+        self._apply_sentiment_model_key(key, save=save)
+
     def on_language_changed(self, event=None):
         self.cfg.text_language = self.lang_var.get().strip()
+        self._refresh_sentiment_model_options(
+            self.cfg.text_language,
+            select_key=self._recommended_sentiment_key(self.cfg.text_language),
+            save=False
+        )
 
-        # 同步保存到 settings.json
+        model_map = getattr(self.cfg, "sentiment_model_map", {}) or {}
+        key = getattr(self.cfg, "sentiment_model_key", "")
+        rel_path = model_map.get(key, getattr(self.cfg, "sentiment_model", ""))
+
+        # ????? settings.json
         save_user_settings({
             "text_language": self.cfg.text_language,
+            "sentiment_model_key": key,
+            "sentiment_model": rel_path,
             "aihubmix_base_url": getattr(self.cfg, "aihubmix_base_url", ""),
             "aihubmix_api_key": getattr(self.cfg, "aihubmix_api_key", None),
             "aihubmix_default_model": getattr(self.cfg, "aihubmix_default_model", ""),
         })
 
-        self._log(f"✅ text_language set to: {self.cfg.text_language}")
-        messagebox.showinfo("已保存", f"文本语言已切换为：{self.cfg.text_language}\n下次打开会自动记住。")
+        self._log(f"? text_language set to: {self.cfg.text_language}")
+        messagebox.showinfo("???", f"?????????{self.cfg.text_language}
+??????????")
+
+    def on_sentiment_model_changed(self, event=None):
+        label = self.sentiment_model_var.get().strip()
+        key = self.sentiment_model_label_to_key.get(label)
+        if not key:
+            return
+        self._apply_sentiment_model_key(key, save=True)
+        self._log(f"? sentiment_model_key set to: {key}")
+        messagebox.showinfo("???", f"?????????{label}
+??????????")
 
     def on_negative_mode_changed(self, event=None):
         """
@@ -1616,17 +1719,17 @@ class App(ttk.Frame):
 
     def pre_download_models(self):
         """
-        【发布版-离线】检查本地模型是否齐全（不联网、不下载、不走 huggingface 缓存）
-        约定目录结构（exe 或项目根目录同级）：
+        ????-????????????????????????huggingface???
+        ???????exe ??????????
         ./models/
-            embedding/  (句向量模型目录)
-            sentiment/  (情感模型目录)
+            embedding/  (??????)
+            sentiment/<key>/  (??????)
 
-        config 建议：
+        config ???
         cfg.embedding_model = "./models/embedding"
-        cfg.sentiment_model = "./models/sentiment"   # 如果启用情感
+        cfg.sentiment_model = "./models/sentiment/<key>"   # ??????
         """
-        # 以程序启动目录为基准（exe 同目录 / 项目根目录）
+        # ???????????exe ???/ ??????
         base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
         models_root = os.path.join(base_dir, "models")
 
@@ -1635,56 +1738,71 @@ class App(ttk.Frame):
 
         missing = []
 
-        # 1) embedding（必须）
+        # 1) embedding????
         if not emb_path:
-            missing.append("embedding_model（未配置）")
+            missing.append("embedding_model?????")
         else:
-            # 如果是相对路径，转绝对路径（相对于 exe/启动目录）
+            # ?????????????????exe/?????
             emb_abs = emb_path
             if not os.path.isabs(emb_abs):
                 emb_abs = os.path.join(base_dir, emb_path)
             if not os.path.isdir(emb_abs):
-                missing.append(f"Embedding 模型目录不存在：{emb_abs}")
+                missing.append(f"Embedding ????????{emb_abs}")
             else:
-                self._log(f"✅ Embedding 模型就绪：{emb_abs}")
-            # 写回 cfg，保证后续加载使用绝对路径
+                self._log(f"? Embedding ?????{emb_abs}")
+            # ?? cfg?????????????
             self.cfg.embedding_model = emb_abs
 
-        # 2) sentiment（可选，但你现在要启用“仅负面”，建议必须有）
+        # 2) sentiment???????????????????????
         if sent_path:
             sent_abs = sent_path
             if not os.path.isabs(sent_abs):
                 sent_abs = os.path.join(base_dir, sent_path)
             if not os.path.isdir(sent_abs):
-                missing.append(f"Sentiment 模型目录不存在：{sent_abs}")
+                missing.append(f"Sentiment ????????{sent_abs}")
             else:
-                self._log(f"✅ Sentiment 模型就绪：{sent_abs}")
+                self._log(f"? Sentiment ?????{sent_abs}")
             self.cfg.sentiment_model = sent_abs
 
-        # 3) 允许你把模型放在默认位置：./models/embedding 和 ./models/sentiment
-        # 如果 config 没写路径，也可以自动 fallback 到默认位置（可选）
-        # 你如果希望强制按 config 来，就把这段删掉
+        # 3) ?????????????./models/embedding ? ./models/sentiment/<key>
+        # ?? config ?????????? fallback ?????????
         if emb_path in (None, "", "auto"):
             default_emb = os.path.join(models_root, "embedding")
             if os.path.isdir(default_emb):
                 self.cfg.embedding_model = default_emb
-                self._log(f"✅ Embedding 使用默认目录：{default_emb}")
+                self._log(f"? Embedding ???????{default_emb}")
             else:
-                missing.append(f"Embedding 默认目录不存在：{default_emb}")
+                missing.append(f"Embedding ????????{default_emb}")
 
         if sent_path in (None, "", "auto"):
-            default_sent = os.path.join(models_root, "sentiment")
-            if os.path.isdir(default_sent):
+            key = getattr(self.cfg, "sentiment_model_key", "") or ""
+            default_sent = None
+            if key:
+                candidate = os.path.join(models_root, "sentiment", key)
+                if os.path.isdir(candidate):
+                    default_sent = candidate
+            if not default_sent:
+                legacy = os.path.join(models_root, "sentiment")
+                if os.path.isdir(legacy):
+                    default_sent = legacy
+            if default_sent:
                 self.cfg.sentiment_model = default_sent
-                self._log(f"✅ Sentiment 使用默认目录：{default_sent}")
+                self._log(f"? Sentiment ???????{default_sent}")
+            else:
+                missing.append(f"Sentiment ????????{os.path.join(models_root, 'sentiment')}")
 
         if missing:
-            msg = "离线模型缺失，无法运行（发布包应当自带 models 目录）：\n\n" + "\n".join(f"- {x}" for x in missing) + \
-                "\n\n请确认目录结构：\n" \
-                f"{models_root}\\embedding\\...\n" \
-                f"{models_root}\\sentiment\\...\n"
+            msg = "??????????????????? models ????
+
+" + "
+".join(f"- {x}" for x in missing) +                 "
+
+????????
+"                 f"{models_root}\embedding\...
+"                 f"{models_root}\sentiment\<key>\...
+"
             self._log(msg)
-            messagebox.showerror("模型缺失", msg)
+            messagebox.showerror("????", msg)
             raise RuntimeError(msg)
 
     def _on_close(self):
