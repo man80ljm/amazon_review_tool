@@ -1,12 +1,14 @@
 {
-  "text_language": "en",
+  "text_language": "zh_cn",
   "aihubmix_base_url": "",
   "aihubmix_api_key": null,
   "aihubmix_default_model": "",
   "negative_mode": "FUSION",
-  "star_negative_threshold": 3.0,
-  "sentiment_conf_threshold": 0.75,
+  "star_negative_threshold": 3.5,
+  "sentiment_conf_threshold": 0.65,
   "fusion_w_star": 1.0,
   "fusion_w_sent": 1.0,
-  "fusion_keep_threshold": 1.5
+  "fusion_keep_threshold": 1.6,
+  "sentiment_model_key": "zh_dianping",
+  "sentiment_model": "models/sentiment/zh_dianping"
 }

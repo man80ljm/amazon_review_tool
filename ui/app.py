@@ -1558,10 +1558,10 @@ class App(ttk.Frame):
     def _sentiment_options_for_lang(self, lang: str):
         if self._lang_bucket(lang) == "zh":
             return [
-                ("zh_dianping", "??-????"),
-                ("zh_general", "??-??"),
-                ("zh_chinanews", "??-??"),
-                ("zh_jd_binary", "??-??"),
+                ("zh_dianping", "\u4e2d\u6587-\u5927\u4f17\u70b9\u8bc4"),
+                ("zh_general", "\u4e2d\u6587-\u901a\u7528"),
+                ("zh_chinanews", "\u4e2d\u6587-\u65b0\u95fb"),
+                ("zh_jd_binary", "\u4e2d\u6587-\u4eac\u4e1c"),
             ]
         return [("en_sst2", "English-SST2")]
 
@@ -1790,17 +1790,15 @@ class App(ttk.Frame):
                 missing.append(f"Sentiment ????????{os.path.join(models_root, 'sentiment')}")
 
         if missing:
-            msg = "??????????????????? models ????
-
-" + "
-".join(f"- {x}" for x in missing) +                 "
-
-????????
-"                 f"{models_root}\embedding\...
-"                 f"{models_root}\sentiment\<key>\...
-"
+            msg = (
+                "Offline models missing; cannot run (release package should include models dir):\n\n"
+                + "\n".join(f"- {x}" for x in missing)
+                + "\n\nPlease check directory layout:\n"
+                + f"{models_root}\\embedding\\...\n"
+                + f"{models_root}\\sentiment\\<key>\\...\n"
+            )
             self._log(msg)
-            messagebox.showerror("????", msg)
+            messagebox.showerror("Models missing", msg)
             raise RuntimeError(msg)
 
     def _on_close(self):
