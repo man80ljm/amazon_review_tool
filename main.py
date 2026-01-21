@@ -1,9 +1,10 @@
 # main.py
 import tkinter as tk
 from tkinter import ttk
+import traceback
+
 from config import AppConfig
 from ui.app import App
-import traceback
 
 
 def main():
