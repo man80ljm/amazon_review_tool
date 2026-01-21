@@ -52,8 +52,7 @@ def _add_df_table(
     heading: str,
     max_rows: int = 30,
     max_cols: int = 10,
-    translate_fn=None
-    translate_fn=None
+    translate_fn=None,
 ):
     """把DataFrame以表格形式插入Word（防卡：限制行列）"""
     doc.add_heading(_tr(heading, translate_fn), level=2)
