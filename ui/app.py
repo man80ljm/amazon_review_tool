@@ -1126,428 +1126,438 @@ class App(ttk.Frame):
 
     def on_plot_k(self):
         if self.k_scan is None:
-            messagebox.showwarning("提示", "请先运行全流程（至少跑到选K扫描）")
+            messagebox.showwarning("??", "?????????????K???")
             return
 
-        rec = recommend_k(self.k_scan.k_to_silhouette)
-        best_k = int(rec.best_k)
+        def job():
+            self._set_progress(0, 1, "Generating K selection plot...")
 
-        labels = {
-            "x_label": "K",
-            "y1_label": "WCSS / Inertia",
-            "y2_label": "Silhouette Score",
-            "line1_label": "WCSS/Inertia (Elbow) - solid (blue)",
-            "line2_label": "Silhouette Score - dashed (orange)",
-            "title": "Optimal K Selection (Elbow & Silhouette)",
-            "title_with_k": f"Optimal K Selection (Recommended K={best_k})",
-            "vline_label": f"Recommended K = {best_k} - vertical (green)",
-        }
+            rec = recommend_k(self.k_scan.k_to_silhouette)
+            best_k = int(rec.best_k)
 
-        out_lang = self._get_output_language()
-        if out_lang in {"zh", "en"}:
-            keys = list(labels.keys())
-            vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
-            labels = dict(zip(keys, vals))
+            labels = {
+                "x_label": "K",
+                "y1_label": "WCSS / Inertia",
+                "y2_label": "Silhouette Score",
+                "line1_label": "WCSS/Inertia (Elbow) - solid (blue)",
+                "line2_label": "Silhouette Score - dashed (orange)",
+                "title": "Optimal K Selection (Elbow & Silhouette)",
+                "title_with_k": f"Optimal K Selection (Recommended K={best_k})",
+                "vline_label": f"Recommended K = {best_k} - vertical (green)",
+            }
 
-        png_path = os.path.join(self.output_dir, "k_selection.png")
-        plot_k_curves(
-            self.k_scan.k_to_inertia,
-            self.k_scan.k_to_silhouette,
-            recommended_k=best_k,
-            save_path=png_path,
-            lang=self.cfg.text_language,
-            labels=labels
-        )
-
-        # 如果勾选了自动应用推荐K，则同步更新 Spinbox 显示
-        if self.auto_apply_k.get():
-            try:
-                self.k_var.set(best_k)
-            except Exception:
-                pass
-
-        cur_k = None
-        try:
-            cur_k = int(self.k_var.get())
-        except Exception:
-            cur_k = best_k
-
-        messagebox.showinfo(
-            "完成",
-            f"K选择图已导出：\n{png_path}\n\n"
-            f"推荐K={best_k}\n当前K={cur_k}\n\n"
-            f"如需更新聚类结果：请点“仅重跑 Step4-5（用当前K）”。"
-        )
-
-    def on_asin_compare(self):
-        """
-        跨ASIN对比（保留旧版 + 核心升级）：
-        旧：
-        - ASIN×Cluster 占比热力图 + csv
-        新（核心升级）：
-        - Attribute Taxonomy
-        - ASIN×Attribute share% 热力图
-        - ASIN×Attribute pain 热力图
-        - Opportunity Insights
-        - 导出：asin_attribute_matrix.xlsx
-        """
-        import os
-        import pandas as pd
-        from tkinter import messagebox
-
-        # 0) 前置检查
-        if self.df_work is None or "cluster_id" not in self.df_work.columns:
-            messagebox.showwarning("提示", "请先完成聚类（Step4-5）")
-            return
-
-        df_clustered = self.df_work.copy()
-
-        # 1) ASIN列 / Star列 兼容
-        asin_col = None
-        try:
-            asin_col = (self.cfg.field_map.get("asin") or "").strip()
-        except Exception:
-            asin_col = None
-        if not asin_col:
-            asin_col = "_group"
-
-        if asin_col not in df_clustered.columns:
-            messagebox.showwarning(
-                "提示",
-                f"未找到 ASIN 列（当前使用：{asin_col}）。\n"
-                "请确认数据中包含 ASIN，或检查自动列名识别/field_map。"
-            )
-            return
-
-        star_col = None
-        try:
-            star_col = (self.cfg.field_map.get("star") or "").strip()
-        except Exception:
-            star_col = None
-        if not star_col or star_col not in df_clustered.columns:
-            star_col = "_score" if "_score" in df_clustered.columns else ("Star" if "Star" in df_clustered.columns else None)
-
-        if star_col is None or star_col not in df_clustered.columns:
-            messagebox.showwarning("提示", "缺少评分列（Star/_score），无法计算 pain 与 Priority。")
-            return
-
-        # 2) cluster_keywords（用于 Attribute taxonomy）
-        cluster_keywords = getattr(self, "cluster_keywords", None)
-        if not cluster_keywords:
-            # 兜底：从 cluster_summary 拿
-            cs = getattr(self, "cluster_summary", None)
-            if cs is not None and hasattr(cs, "columns") and ("cluster_id" in cs.columns) and ("keywords" in cs.columns):
-                cluster_keywords = dict(zip(cs["cluster_id"].tolist(), cs["keywords"].tolist()))
-
-        if not cluster_keywords:
-            messagebox.showwarning("提示", "没有找到 cluster_keywords。请确认 Step5 已生成关键词。")
-            return
-
-        # 3) 输出目录
-        out_dir = getattr(self, "output_dir", None) or os.path.join(os.getcwd(), "outputs")
-        os.makedirs(out_dir, exist_ok=True)
-
-        # =========================
-        # A) 旧：ASIN×Cluster 热力图（保留）
-        # =========================
-        try:
-            pivot_cluster = asin_cluster_percent(df_clustered, asin_col=asin_col, cluster_col="cluster_id")
-            self.asin_pivot = pivot_cluster
-
-            old_png = os.path.join(out_dir, "asin_cluster_percent_heatmap.png")
-            title_cluster = "ASIN × Cluster Share (%)"
             out_lang = self._get_output_language()
-            if out_lang in {"zh", "en"}:
-                title_cluster = self._translate_texts_to([title_cluster], "en", out_lang)[0]
-
-            labels = {"x_label": "Cluster ID", "y_label": "ASIN"}
             if out_lang in {"zh", "en"}:
                 keys = list(labels.keys())
                 vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
                 labels = dict(zip(keys, vals))
 
-            fig = plot_heatmap(
-                pivot_cluster,
-                save_path=old_png,
-                title=title_cluster,
+            png_path = os.path.join(self.output_dir, "k_selection.png")
+            plot_k_curves(
+                self.k_scan.k_to_inertia,
+                self.k_scan.k_to_silhouette,
+                recommended_k=best_k,
+                save_path=png_path,
                 lang=self.cfg.text_language,
                 labels=labels
             )
-            import matplotlib.pyplot as plt
-            plt.close(fig)
 
-            old_csv = os.path.join(out_dir, "asin_cluster_percent.csv")
-            pivot_cluster.round(2).to_csv(old_csv, encoding="utf-8-sig")
+            def done():
+                if self.auto_apply_k.get():
+                    try:
+                        self.k_var.set(best_k)
+                    except Exception:
+                        pass
 
-            # 给写报告用
-            self.asin_heatmap_png = old_png
+                cur_k = None
+                try:
+                    cur_k = int(self.k_var.get())
+                except Exception:
+                    cur_k = best_k
 
-        except Exception as e:
-            messagebox.showwarning("提示", f"旧版跨ASIN热力图生成失败：{e}")
+                self._set_progress(1, 1, "K selection plot ready.")
+                messagebox.showinfo(
+                    "??",
+                    f"K???????
+{png_path}
+
+"
+                    f"??K={best_k}
+??K={cur_k}
+
+"
+                    f"???????????????Step4-5????K???"
+                )
+
+            self._ui(done)
+
+        self._run_in_thread(job, "Generating K selection plot...")
+
+    def on_asin_compare(self):
+        """
+        ?ASIN???????+??????
+        ??
+        - ASIN?Cluster ????? + csv
+        ??
+        - Attribute Taxonomy
+        - ASIN?Attribute share% ???
+        - ASIN?Attribute pain ???
+        - Opportunity Insights
+        - ???asin_attribute_matrix.xlsx
+        """
+        import os
+        import pandas as pd
+        from tkinter import messagebox
+
+        if self.df_work is None or "cluster_id" not in self.df_work.columns:
+            messagebox.showwarning("??", "???????Step4-5?")
             return
 
-        # =========================
-        # B) 新：ASIN×Attribute（核心升级）
-        # =========================
-        try:
-            from core.insights import (
-                build_attribute_taxonomy,
-                asin_attribute_share,
-                asin_attribute_pain,
-                opportunity_insights,
-            )
+        def job():
+            self._set_progress(0, 1, "Generating cross-ASIN outputs...")
 
-            taxonomy_df = build_attribute_taxonomy(cluster_keywords, topn=3)
-            if self._translation_needed() and "attribute_name" in taxonomy_df.columns:
-                taxonomy_df = taxonomy_df.copy()
-                taxonomy_df["attribute_name"] = self._translate_series(taxonomy_df["attribute_name"])
-            share_pivot = asin_attribute_share(
-                df_clustered,
-                asin_col=asin_col,
-                cluster_col="cluster_id",
-                taxonomy_df=taxonomy_df
-            )
-            pain_pivot = asin_attribute_pain(
-                df_clustered,
-                asin_col=asin_col,
-                cluster_col="cluster_id",
-                star_col=star_col,
-                taxonomy_df=taxonomy_df
-            )
-            opp_df = opportunity_insights(pain_pivot, topk=15)
-            if opp_df is not None and len(opp_df) > 0 and "attribute" in opp_df.columns and self._translation_needed():
-                opp_df = opp_df.copy()
-                opp_df["attribute"] = self._translate_series(opp_df["attribute"])
+            try:
+                df_clustered = self.df_work.copy()
 
-            out_xlsx = os.path.join(out_dir, "asin_attribute_matrix.xlsx")
-            with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
-                taxonomy_df.to_excel(writer, sheet_name="attribute_taxonomy", index=False)
-                share_pivot.to_excel(writer, sheet_name="asin_attribute_share")
-                pain_pivot.to_excel(writer, sheet_name="asin_attribute_pain")
-                (opp_df if opp_df is not None else pd.DataFrame()).to_excel(writer, sheet_name="opportunity_top", index=False)
+                asin_col = None
+                try:
+                    asin_col = (self.cfg.field_map.get("asin") or "").strip()
+                except Exception:
+                    asin_col = None
+                if not asin_col:
+                    asin_col = "_group"
 
-            # 两张新热力图（沿用你现在的 imshow 画法）
-            import numpy as np
-            import matplotlib.pyplot as plt
-
-            def _plot_heatmap(pivot_df: pd.DataFrame, title: str, out_png: str):
-                if pivot_df is None or pivot_df.shape[0] == 0 or pivot_df.shape[1] == 0:
+                if asin_col not in df_clustered.columns:
+                    self._ui(lambda: messagebox.showwarning(
+                        "??",
+                        f"???ASIN???????{asin_col}??
+"
+                        "????????ASIN??????????/field_map?"
+                    ))
                     return
-                apply_matplotlib_style(self.cfg.text_language)
-                fig = plt.figure(figsize=(12, max(4, 0.35 * pivot_df.shape[0])))
-                ax = fig.add_subplot(111)
-                data = pivot_df.values.astype(float)
-                im = ax.imshow(data, aspect="auto")
 
-                ax.set_title(title)
-                ax.set_yticks(np.arange(pivot_df.shape[0]))
-                ax.set_yticklabels(pivot_df.index.astype(str).tolist(), fontsize=8)
+                star_col = None
+                try:
+                    star_col = (self.cfg.field_map.get("star") or "").strip()
+                except Exception:
+                    star_col = None
+                if not star_col or star_col not in df_clustered.columns:
+                    star_col = "_score" if "_score" in df_clustered.columns else ("Star" if "Star" in df_clustered.columns else None)
 
-                ax.set_xticks(np.arange(pivot_df.shape[1]))
-                ax.set_xticklabels(pivot_df.columns.astype(str).tolist(), rotation=45, ha="right", fontsize=8)
+                if star_col is None or star_col not in df_clustered.columns:
+                    self._ui(lambda: messagebox.showwarning("??", "??????Star/_score?????? pain ? Priority?"))
+                    return
 
-                fig.colorbar(im, ax=ax, fraction=0.02, pad=0.02)
-                fig.tight_layout()
-                fig.savefig(out_png, dpi=200)
+                cluster_keywords = getattr(self, "cluster_keywords", None)
+                if not cluster_keywords:
+                    cs = getattr(self, "cluster_summary", None)
+                    if cs is not None and hasattr(cs, "columns") and ("cluster_id" in cs.columns) and ("keywords" in cs.columns):
+                        cluster_keywords = dict(zip(cs["cluster_id"].tolist(), cs["keywords"].tolist()))
+
+                if not cluster_keywords:
+                    self._ui(lambda: messagebox.showwarning("??", "???? cluster_keywords???? Step5 ???????"))
+                    return
+
+                out_dir = getattr(self, "output_dir", None) or os.path.join(os.getcwd(), "outputs")
+                os.makedirs(out_dir, exist_ok=True)
+
+                pivot_cluster = asin_cluster_percent(df_clustered, asin_col=asin_col, cluster_col="cluster_id")
+
+                asin_label_map = None
+                out_lang = self._get_output_language()
+                if out_lang in {"zh", "en"} and self._translation_needed():
+                    asin_vals = [str(v) for v in pivot_cluster.index.tolist()]
+                    asin_trans = self._translate_labels(asin_vals)
+                    asin_label_map = dict(zip(asin_vals, asin_trans))
+                    pivot_cluster = pivot_cluster.copy()
+                    pivot_cluster.index = [asin_label_map.get(str(v), str(v)) for v in pivot_cluster.index]
+                self.asin_pivot = pivot_cluster
+
+                old_png = os.path.join(out_dir, "asin_cluster_percent_heatmap.png")
+                title_cluster = "ASIN ? Cluster Share (%)"
+                out_lang = self._get_output_language()
+                if out_lang in {"zh", "en"}:
+                    title_cluster = self._translate_texts_to([title_cluster], "en", out_lang)[0]
+
+                labels = {"x_label": "Cluster ID", "y_label": "ASIN"}
+                if out_lang in {"zh", "en"}:
+                    keys = list(labels.keys())
+                    vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
+                    labels = dict(zip(keys, vals))
+
+                fig = plot_heatmap(
+                    pivot_cluster,
+                    save_path=old_png,
+                    title=title_cluster,
+                    lang=self.cfg.text_language,
+                    labels=labels
+                )
+                import matplotlib.pyplot as plt
                 plt.close(fig)
 
-            png_share = os.path.join(out_dir, "asin_attribute_share.png")
-            png_pain  = os.path.join(out_dir, "asin_attribute_pain.png")
-            title_share = "ASIN × Attribute Share (%)"
-            title_pain = "ASIN × Attribute Pain (Priority)"
-            out_lang = self._get_output_language()
-            if out_lang in {"zh", "en"}:
-                title_share, title_pain = self._translate_texts_to(
-                    [title_share, title_pain],
-                    src_lang="en",
-                    tgt_lang=out_lang
+                old_csv = os.path.join(out_dir, "asin_cluster_percent.csv")
+                pivot_cluster.round(2).to_csv(old_csv, encoding="utf-8-sig")
+                self.asin_heatmap_png = old_png
+
+                from core.insights import (
+                    build_attribute_taxonomy,
+                    asin_attribute_share,
+                    asin_attribute_pain,
+                    opportunity_insights,
                 )
-            _plot_heatmap(share_pivot, title_share, png_share)
-            _plot_heatmap(pain_pivot, title_pain, png_pain)
 
-            # 给写报告用（下一步用）
-            self.asin_attr_xlsx = out_xlsx
-            self.asin_attr_share_png = png_share
-            self.asin_attr_pain_png = png_pain
-            self.asin_taxonomy_df = taxonomy_df
-            self.asin_opp_df = opp_df
+                taxonomy_df = build_attribute_taxonomy(cluster_keywords, topn=3)
+                if self._translation_needed() and "attribute_name" in taxonomy_df.columns:
+                    taxonomy_df = taxonomy_df.copy()
+                    taxonomy_df["attribute_name"] = self._translate_series(taxonomy_df["attribute_name"])
 
-        except Exception as e:
-            messagebox.showwarning("提示", f"核心升级（ASIN×Attribute）生成失败：{e}")
-            return
+                share_pivot = asin_attribute_share(
+                    df_clustered,
+                    asin_col=asin_col,
+                    cluster_col="cluster_id",
+                    taxonomy_df=taxonomy_df
+                )
+                pain_pivot = asin_attribute_pain(
+                    df_clustered,
+                    asin_col=asin_col,
+                    cluster_col="cluster_id",
+                    star_col=star_col,
+                    taxonomy_df=taxonomy_df
+                )
 
-        # 4) 统一弹窗 + 日志
-        try:
-            self._log(f"✅ 已输出旧热力图：{old_png}")
-            self._log(f"✅ 已输出旧CSV：{old_csv}")
-            self._log(f"✅ 已输出新Excel：{out_xlsx}")
-            self._log(f"✅ 已输出新热力图：{png_share}")
-            self._log(f"✅ 已输出新热力图：{png_pain}")
-        except Exception:
-            pass
+                if asin_label_map:
+                    share_pivot = share_pivot.copy()
+                    share_pivot.index = [asin_label_map.get(str(v), str(v)) for v in share_pivot.index]
+                    pain_pivot = pain_pivot.copy()
+                    pain_pivot.index = [asin_label_map.get(str(v), str(v)) for v in pain_pivot.index]
 
-        messagebox.showinfo(
-            "完成",
-            "跨ASIN对比已导出：\n"
-            f"[旧] 热力图：{old_png}\n"
-            f"[旧] CSV：{old_csv}\n\n"
-            f"[新] Excel：{out_xlsx}\n"
-            f"[新] Share热力图：{png_share}\n"
-            f"[新] Pain热力图：{png_pain}\n"
-        )
+                opp_df = opportunity_insights(pain_pivot, topk=15)
+                if opp_df is not None and len(opp_df) > 0 and "attribute" in opp_df.columns and self._translation_needed():
+                    opp_df = opp_df.copy()
+                    opp_df["attribute"] = self._translate_series(opp_df["attribute"])
+
+                out_xlsx = os.path.join(out_dir, "asin_attribute_matrix.xlsx")
+                with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
+                    taxonomy_df.to_excel(writer, sheet_name="attribute_taxonomy", index=False)
+                    share_pivot.to_excel(writer, sheet_name="asin_attribute_share")
+                    pain_pivot.to_excel(writer, sheet_name="asin_attribute_pain")
+                    (opp_df if opp_df is not None else pd.DataFrame()).to_excel(writer, sheet_name="opportunity_top", index=False)
+
+                import numpy as np
+                import matplotlib.pyplot as plt
+
+                def _plot_heatmap(pivot_df: pd.DataFrame, title: str, out_png: str):
+                    if pivot_df is None or pivot_df.shape[0] == 0 or pivot_df.shape[1] == 0:
+                        return
+                    apply_matplotlib_style(self.cfg.text_language)
+                    fig = plt.figure(figsize=(12, max(4, 0.35 * pivot_df.shape[0])))
+                    ax = fig.add_subplot(111)
+                    data = pivot_df.values.astype(float)
+                    im = ax.imshow(data, aspect="auto")
+                    ax.set_title(title)
+                    ax.set_yticks(np.arange(pivot_df.shape[0]))
+                    ax.set_yticklabels(pivot_df.index.astype(str).tolist(), fontsize=8)
+                    ax.set_xticks(np.arange(pivot_df.shape[1]))
+                    ax.set_xticklabels(pivot_df.columns.astype(str).tolist(), rotation=45, ha="right", fontsize=8)
+                    fig.colorbar(im, ax=ax, fraction=0.02, pad=0.02)
+                    fig.tight_layout()
+                    fig.savefig(out_png, dpi=300)
+                    plt.close(fig)
+
+                png_share = os.path.join(out_dir, "asin_attribute_share.png")
+                png_pain  = os.path.join(out_dir, "asin_attribute_pain.png")
+                title_share = "ASIN ? Attribute Share (%)"
+                title_pain = "ASIN ? Attribute Pain (Priority)"
+                if out_lang in {"zh", "en"}:
+                    title_share, title_pain = self._translate_texts_to(
+                        [title_share, title_pain],
+                        src_lang="en",
+                        tgt_lang=out_lang
+                    )
+
+                _plot_heatmap(share_pivot, title_share, png_share)
+                _plot_heatmap(pain_pivot, title_pain, png_pain)
+
+                self._set_progress(1, 1, "Cross-ASIN outputs ready.")
+                self._ui(lambda: messagebox.showinfo(
+                    "??",
+                    "?ASIN??????
+"
+                    f"[?] ????{old_png}
+"
+                    f"[?] CSV?{old_csv}
+
+"
+                    f"[?] Excel?{out_xlsx}
+"
+                    f"[?] Share????{png_share}
+"
+                    f"[?] Pain????{png_pain}
+"
+                ))
+
+            except Exception as e:
+                self._ui(lambda: messagebox.showwarning("??", f"?ASIN???????{e}"))
+
+        self._run_in_thread(job, "Generating cross-ASIN outputs...")
 
     def on_priority(self):
         if self.df_work is None or "cluster_id" not in self.df_work.columns:
-            messagebox.showwarning("提示", "请先完成聚类（Step4-5）")
+            messagebox.showwarning("??", "???????Step4-5?")
             return
 
-        df = self.df_work.copy()
+        def job():
+            self._set_progress(0, 1, "Generating priority outputs...")
+            df = self.df_work.copy()
 
-        # ===== 1. 分组键兜底（没有 ASIN 也能跑）=====
-        # 优先 ASIN，其次景点名称，最后 ALL
-        group_col = None
-        for cand in ["ASIN", "asin", "景点名称", "place", "group"]:
-            if cand in df.columns:
-                group_col = cand
-                break
+            group_col = None
+            for cand in ["ASIN", "asin", "????", "place", "group"]:
+                if cand in df.columns:
+                    group_col = cand
+                    break
 
-        if group_col is None:
-            df["__GROUP__"] = "ALL"
-            group_col = "__GROUP__"
+            if group_col is None:
+                df["__GROUP__"] = "ALL"
+                group_col = "__GROUP__"
 
-        # ===== 2. 评分列兜底 =====
-        try:
-            star_col = (self.cfg.field_map.get("star") or "").strip()
-        except Exception:
-            star_col = None
+            try:
+                star_col = (self.cfg.field_map.get("star") or "").strip()
+            except Exception:
+                star_col = None
 
-        if not star_col or star_col not in df.columns:
-            star_col = "_score"
+            if not star_col or star_col not in df.columns:
+                star_col = "_score"
 
-        if star_col not in df.columns:
-            messagebox.showwarning(
-                "提示",
-                f"未找到评分列（当前使用：{star_col}）。\n"
-                "请确认数据中包含 Star/Rating，或检查自动列名识别/field_map。"
+            if star_col not in df.columns:
+                self._ui(lambda: messagebox.showwarning(
+                    "??",
+                    f"????????????{star_col}??
+"
+                    "???????? Star/Rating??????????/field_map?"
+                ))
+                return
+
+            pr = cluster_priority_safe(
+                df,
+                cluster_col="cluster_id",
+                star_col=star_col,
+                group_col=group_col
             )
-            return
 
-        # ===== 3. 调用安全版优先级计算 =====
-        pr = cluster_priority_safe(
-            df,
-            cluster_col="cluster_id",
-            star_col=star_col,
-            group_col=group_col
-        )
+            self.priority_df = pr
 
-        self.priority_df = pr
+            png_path = os.path.join(self.output_dir, "cluster_priority.png")
+            labels = {
+                "x_label": "Cluster ID",
+                "y_label": "Priority Score",
+                "title": "Cluster Priority Ranking",
+            }
+            out_lang = self._get_output_language()
+            if out_lang in {"zh", "en"}:
+                keys = list(labels.keys())
+                vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
+                labels = dict(zip(keys, vals))
 
-        # ===== 4. 导出 =====
-        png_path = os.path.join(self.output_dir, "cluster_priority.png")
-        labels = {
-            "x_label": "Cluster ID",
-            "y_label": "Priority Score",
-            "title": "Cluster Priority Ranking",
-        }
-        out_lang = self._get_output_language()
-        if out_lang in {"zh", "en"}:
-            keys = list(labels.keys())
-            vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
-            labels = dict(zip(keys, vals))
+            fig = plot_priority(pr, save_path=png_path, lang=self.cfg.text_language, labels=labels)
+            import matplotlib.pyplot as plt
+            plt.close(fig)
 
-        fig = plot_priority(pr, save_path=png_path, lang=self.cfg.text_language, labels=labels)
-        import matplotlib.pyplot as plt
-        plt.close(fig)
+            csv_path = os.path.join(self.output_dir, "cluster_priority.csv")
+            pr.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
-        csv_path = os.path.join(self.output_dir, "cluster_priority.csv")
-        pr.to_csv(csv_path, index=False, encoding="utf-8-sig")
+            self._set_progress(1, 1, "Priority outputs ready.")
+            self._ui(lambda: messagebox.showinfo("??", f"?????????
+{png_path}
+{csv_path}"))
 
-        messagebox.showinfo("完成", f"优先级排序已导出：\n{png_path}\n{csv_path}")
+        self._run_in_thread(job, "Generating priority outputs...")
 
     def on_export(self):
         if self.df_work is None or self.labels is None:
-            messagebox.showwarning("提示", "请先运行流程得到聚类结果")
+            messagebox.showwarning("??", "????????????")
             return
         if "cluster_id" not in self.df_work.columns:
-            messagebox.showwarning("提示", "当前 df_work 缺少 cluster_id，请先重跑 Step4-5")
+            messagebox.showwarning("??", "?? df_work ?? cluster_id?????Step4-5")
             return
 
-        # 1) 导出带cluster的明细
-        detail_path = os.path.join(self.output_dir, "clustered_reviews.csv")
-        save_csv(self.df_work, detail_path)
+        def job():
+            self._set_progress(0, 1, "Exporting results...")
 
-        # ====== 列名兼容：优先使用映射列，否则用内部统一列 ======
-        asin_col = (getattr(self.cfg, "field_map", {}) or {}).get("asin") or None
-        star_col = (getattr(self.cfg, "field_map", {}) or {}).get("star") or None
-        text_col = (getattr(self.cfg, "field_map", {}) or {}).get("text") or None
-        id_col   = (getattr(self.cfg, "field_map", {}) or {}).get("id") or None
+            detail_path = os.path.join(self.output_dir, "clustered_reviews.csv")
+            save_csv(self.df_work, detail_path)
 
-        # fallback
-        if not asin_col or asin_col not in self.df_work.columns:
-            asin_col = "_group" if "_group" in self.df_work.columns else None
-        if not star_col or star_col not in self.df_work.columns:
-            star_col = "_score" if "_score" in self.df_work.columns else None
-        if not text_col or text_col not in self.df_work.columns:
-            text_col = "_text" if "_text" in self.df_work.columns else None
-        if not id_col or id_col not in self.df_work.columns:
-            id_col = "_id" if "_id" in self.df_work.columns else None
+            asin_col = (getattr(self.cfg, "field_map", {}) or {}).get("asin") or None
+            star_col = (getattr(self.cfg, "field_map", {}) or {}).get("star") or None
+            text_col = (getattr(self.cfg, "field_map", {}) or {}).get("text") or None
+            id_col   = (getattr(self.cfg, "field_map", {}) or {}).get("id") or None
 
-        # 2) 导出簇摘要表（Table 1）
-        rows = []
-        total = len(self.df_work)
-        for c in sorted(self.cluster_keywords.keys()):
-            idx = (self.df_work["cluster_id"] == c)
-            ratio = float(idx.mean()) if total > 0 else 0.0
-            rows.append({
-                "cluster_id": int(c),
-                "cluster_size": int(idx.sum()),
-                "ratio": ratio,
-                "keywords": ", ".join(self.cluster_keywords.get(c, [])),
-            })
-        summary = pd.DataFrame(rows).sort_values("ratio", ascending=False)
+            if not asin_col or asin_col not in self.df_work.columns:
+                asin_col = "_group" if "_group" in self.df_work.columns else None
+            if not star_col or star_col not in self.df_work.columns:
+                star_col = "_score" if "_score" in self.df_work.columns else None
+            if not text_col or text_col not in self.df_work.columns:
+                text_col = "_text" if "_text" in self.df_work.columns else None
+            if not id_col or id_col not in self.df_work.columns:
+                id_col = "_id" if "_id" in self.df_work.columns else None
 
-        # 3) 代表评论表（兼容字段）
-        rep_rows = []
-        for c, idx_list in (self.cluster_reps or {}).items():
-            for rank, i in enumerate(idx_list, start=1):
-                r = self.df_work.iloc[int(i)]
-
-                rep_rows.append({
+            rows = []
+            total = len(self.df_work)
+            for c in sorted(self.cluster_keywords.keys()):
+                idx = (self.df_work["cluster_id"] == c)
+                ratio = float(idx.mean()) if total > 0 else 0.0
+                rows.append({
                     "cluster_id": int(c),
-                    "rank": int(rank),
-                    "ASIN": r.get(asin_col, "-") if asin_col else r.get("_group", "-"),
-                    "Star": r.get(star_col, "-") if star_col else r.get("_score", "-"),
-                    "review_id": r.get(id_col, "-") if id_col else r.get("_id", "-"),
-                    "review_text": r.get(text_col, "") if text_col else r.get("_text", ""),
+                    "cluster_size": int(idx.sum()),
+                    "ratio": ratio,
+                    "keywords": ", ".join(self.cluster_keywords.get(c, [])),
                 })
+            summary = pd.DataFrame(rows).sort_values("ratio", ascending=False)
 
-        reps_df = pd.DataFrame(rep_rows)
+            rep_rows = []
+            for c, idx_list in (self.cluster_reps or {}).items():
+                for rank, i in enumerate(idx_list, start=1):
+                    r = self.df_work.iloc[int(i)]
+                    rep_rows.append({
+                        "cluster_id": int(c),
+                        "rank": int(rank),
+                        "ASIN": r.get(asin_col, "-") if asin_col else r.get("_group", "-"),
+                        "Star": r.get(star_col, "-") if star_col else r.get("_score", "-"),
+                        "review_id": r.get(id_col, "-") if id_col else r.get("_id", "-"),
+                        "review_text": r.get(text_col, "") if text_col else r.get("_text", ""),
+                    })
 
-        out_lang = self._get_output_language()
-        if self._translation_needed():
-            if "keywords" in summary.columns:
-                summary = summary.copy()
-                summary["keywords"] = self._translate_series(summary["keywords"])
-            if "review_text" in reps_df.columns:
-                reps_df = reps_df.copy()
-                reps_df["review_text"] = self._translate_series(reps_df["review_text"])
+            reps_df = pd.DataFrame(rep_rows)
 
-        if out_lang in {"zh", "en"}:
-            summary.columns = self._translate_texts_to(list(summary.columns), src_lang="en", tgt_lang=out_lang)
-            reps_df.columns = self._translate_texts_to(list(reps_df.columns), src_lang="en", tgt_lang=out_lang)
+            out_lang = self._get_output_language()
+            if self._translation_needed():
+                if "keywords" in summary.columns:
+                    summary = summary.copy()
+                    summary["keywords"] = self._translate_series(summary["keywords"])
+                if "review_text" in reps_df.columns:
+                    reps_df = reps_df.copy()
+                    reps_df["review_text"] = self._translate_series(reps_df["review_text"])
 
-        xlsx_path = os.path.join(self.output_dir, "results.xlsx")
-        sheets = {"cluster_summary": summary, "representatives": reps_df}
+            if out_lang in {"zh", "en"}:
+                summary.columns = self._translate_texts_to(list(summary.columns), src_lang="en", tgt_lang=out_lang)
+                reps_df.columns = self._translate_texts_to(list(reps_df.columns), src_lang="en", tgt_lang=out_lang)
 
-        if hasattr(self, "asin_pivot") and self.asin_pivot is not None:
-            sheets["asin_cluster_percent"] = self.asin_pivot.reset_index()
+            xlsx_path = os.path.join(self.output_dir, "results.xlsx")
+            sheets = {"cluster_summary": summary, "representatives": reps_df}
 
-        if hasattr(self, "priority_df") and self.priority_df is not None:
-            sheets["cluster_priority"] = self.priority_df
+            if hasattr(self, "asin_pivot") and self.asin_pivot is not None:
+                sheets["asin_cluster_percent"] = self.asin_pivot.reset_index()
 
-        save_excel(sheets, xlsx_path)
+            if hasattr(self, "priority_df") and self.priority_df is not None:
+                sheets["cluster_priority"] = self.priority_df
 
-        messagebox.showinfo("导出完成", f"已导出：\n- {detail_path}\n- {xlsx_path}")
+            save_excel(sheets, xlsx_path)
+
+            self._set_progress(1, 1, "Export complete.")
+            self._ui(lambda: messagebox.showinfo("????", f"????
+- {detail_path}
+- {xlsx_path}"))
+
+        self._run_in_thread(job, "Exporting results...")
 
     def on_report_offline(self):
         if self.df_work is None or self.cluster_keywords is None or self.cluster_reps is None or self.k_scan is None:

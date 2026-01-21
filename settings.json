@@ -10,5 +10,6 @@
   "fusion_w_sent": 1.0,
   "fusion_keep_threshold": 1.2,
   "sentiment_model_key": "zh_general",
-  "sentiment_model": "models/sentiment/zh_general"
+  "sentiment_model": "models/sentiment/zh_general",
+  "output_language": "en"
 }

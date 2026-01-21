@@ -423,7 +423,7 @@ def _add_representatives(doc: Document, reps_df: Optional[pd.DataFrame], max_per
     cluster_ids = sorted(pd.Series(reps_df["cluster_id"]).dropna().unique().tolist())
 
     for cid in cluster_ids:
-            doc.add_heading(_tr(f"Cluster {cid}", translate_fn), level=3)
+        doc.add_heading(_tr(f"Cluster {cid}", translate_fn), level=3)
         sub = reps_df[reps_df["cluster_id"] == cid].copy()
 
         if rank_col:
