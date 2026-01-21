@@ -91,6 +91,12 @@ class AppConfig:
     embedding_batch_size: int = 64  # 🔥 确保有默认值
 
     # Step3：K 扫描参数
+    # Translation (offline MarianMT)
+    translate_model_zh_en: str = "models/translate/zh_en"
+    translate_model_en_zh: str = "models/translate/en_zh"
+    translate_batch_size: int = 16
+    output_language: str = "none"  # none / zh / en
+
     k_min: int = 2
     k_max: int = 20
     random_state: int = 42
@@ -150,6 +156,18 @@ class AppConfig:
             print(f"⚠️ k_max 无效 ({self.k_max})，恢复默认值")
             self.k_max = 20
 
+        if not self.translate_model_zh_en:
+            self.translate_model_zh_en = "models/translate/zh_en"
+
+        if not self.translate_model_en_zh:
+            self.translate_model_en_zh = "models/translate/en_zh"
+
+        if self.translate_batch_size is None or self.translate_batch_size <= 0:
+            self.translate_batch_size = 16
+
+        if not self.output_language:
+            self.output_language = "none"
+
         # sentiment_model 允许为空，但不要让它变成非字符串
         if self.sentiment_model is not None and not isinstance(self.sentiment_model, str):
             self.sentiment_model = "models/sentiment"
@@ -189,6 +207,15 @@ class AppConfig:
         if self.sentiment_model:
             if not os.path.isdir(self.sentiment_model):
                 raise RuntimeError(f"Sentiment 模型目录不存在: {self.sentiment_model}")
+
+        out_lang = (self.output_language or "none").strip().lower()
+        if out_lang in {"zh", "en"}:
+            zh_en = self.translate_model_zh_en
+            en_zh = self.translate_model_en_zh
+            if not os.path.isdir(zh_en):
+                raise RuntimeError(f"Translate ???????: {zh_en}")
+            if not os.path.isdir(en_zh):
+                raise RuntimeError(f"Translate ???????: {en_zh}")
             
 import os
 import sys

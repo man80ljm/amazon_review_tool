@@ -66,6 +66,12 @@ class SentimentAnalyzer:
             tokenizer=tokenizer,
             device=device,
         )
+        tokenizer_max = getattr(tokenizer, "model_max_length", None)
+        model_max = getattr(model.config, "max_position_embeddings", 512)
+        if isinstance(tokenizer_max, int) and 0 < tokenizer_max < 1000000:
+            self.max_length = min(tokenizer_max, model_max)
+        else:
+            self.max_length = model_max
 
     def _prep(self, text: str) -> str:
         text = (text or "").strip()
@@ -97,10 +103,10 @@ class SentimentAnalyzer:
 
             # ✅ 不要传 local_files_only
             try:
-                outs = self.pipe(batch, truncation=True)
+                outs = self.pipe(batch, truncation=True, max_length=self.max_length)
             except TypeError:
                 # 兼容部分旧 transformers
-                outs = self.pipe(batch)
+                outs = self.pipe(batch, truncation=True)
 
             for o in outs:
                 lab_raw = (o.get("label") or "").upper()

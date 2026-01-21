@@ -27,28 +27,39 @@ def _pick_first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optiona
     return None
 
 
-def _add_picture_if_exists(doc: Document, path: Optional[str], heading: Optional[str] = None, width_in: float = 6.5):
+def _tr(text: str, translate_fn=None) -> str:
+    if not translate_fn or not text:
+        return text
+    try:
+        return translate_fn([text])[0]
+    except Exception:
+        return text
+
+
+def _add_picture_if_exists(doc: Document, path: Optional[str], heading: Optional[str] = None, width_in: float = 6.5, translate_fn=None):
     if _safe_exists(path):
         if heading:
-            doc.add_heading(heading, level=2)
+            doc.add_heading(_tr(heading, translate_fn), level=2)
         try:
             doc.add_picture(path, width=Inches(width_in))
         except Exception:
             # 图片损坏/格式不支持也不应导致全流程失败
-            doc.add_paragraph(f"[WARN] Failed to insert image: {path}")
+            doc.add_paragraph(_tr(f"[WARN] Failed to insert image: {path}", translate_fn))
 
 def _add_df_table(
     doc: Document,
     df: pd.DataFrame,
     heading: str,
     max_rows: int = 30,
-    max_cols: int = 10
+    max_cols: int = 10,
+    translate_fn=None
+    translate_fn=None
 ):
     """把DataFrame以表格形式插入Word（防卡：限制行列）"""
-    doc.add_heading(heading, level=2)
+    doc.add_heading(_tr(heading, translate_fn), level=2)
 
     if df is None or len(df) == 0:
-        doc.add_paragraph("No data available.")
+        doc.add_paragraph(_tr("No data available.", translate_fn))
         return
 
     work = df.copy()
@@ -56,18 +67,18 @@ def _add_df_table(
     # 限制列数（避免表太宽导致Word卡/乱）
     if work.shape[1] > max_cols:
         work = work.iloc[:, :max_cols].copy()
-        doc.add_paragraph(f"[NOTE] Columns truncated to first {max_cols} columns.")
+        doc.add_paragraph(_tr(f"[NOTE] Columns truncated to first {max_cols} columns.", translate_fn))
 
     # 限制行数（避免表太长）
     if len(work) > max_rows:
         work = work.head(max_rows).copy()
-        doc.add_paragraph(f"[NOTE] Rows truncated to top {max_rows} rows.")
+        doc.add_paragraph(_tr(f"[NOTE] Rows truncated to top {max_rows} rows.", translate_fn))
 
     # 建表：表头
     table = doc.add_table(rows=1, cols=work.shape[1])
     hdr = table.rows[0].cells
     for j, c in enumerate(work.columns):
-        hdr[j].text = str(c)
+        hdr[j].text = _tr(str(c), translate_fn)
 
     # 内容
     for _, r in work.iterrows():
@@ -116,6 +127,7 @@ def _add_key_findings(
     opp: Optional[pd.DataFrame] = None,       # columns: asin, attribute, delta, pain(optional)
     topk: int = 3,
     show_metrics: bool = False,
+    translate_fn=None,
     make_tables: bool = True,                # ✅ 新增：是否生成表格
 ):
     """
@@ -123,7 +135,7 @@ def _add_key_findings(
     show_metrics=True 时，会把 mean_value/value/delta 一起带上。
     make_tables=True 时，会生成两张 Key Findings 表（全局/产品层）。
     """
-    doc.add_heading("Key Findings / 关键发现", level=3)
+    doc.add_heading(_tr("Key Findings / 关键发现", translate_fn), level=3)
 
     bullets = []
 
@@ -233,11 +245,11 @@ def _add_key_findings(
 
     # 输出 bullet
     if not bullets:
-        doc.add_paragraph("[NOTE] No sufficient data to summarize key findings.")
+        doc.add_paragraph(_tr("[NOTE] No sufficient data to summarize key findings.", translate_fn))
         return
 
     for b in bullets:
-        doc.add_paragraph(b, style="List Bullet")
+        doc.add_paragraph(_tr(b, translate_fn), style="List Bullet")
 
     # ----------------------------------------------------
     # ✅ 可选：生成 Key Findings 表格（更论文友好）
@@ -270,7 +282,8 @@ def _add_key_findings(
                 df_global,
                 heading="Key Findings Table (Global) / 关键发现表（全局）",
                 max_rows=50,
-                max_cols=6
+                max_cols=6,
+                translate_fn=translate_fn
             )
 
         # Table 2: Product-level
@@ -303,57 +316,58 @@ def _add_key_findings(
                 df_prod,
                 heading="Key Findings Table (Product) / 关键发现表（产品层）",
                 max_rows=80,
-                max_cols=6
+                max_cols=6,
+                translate_fn=translate_fn
             )
 
     except Exception as e:
-        doc.add_paragraph(f"[WARN] Key Findings table generation failed: {e}")
+            doc.add_paragraph(_tr(f"[WARN] Key Findings table generation failed: {e}", translate_fn))
 
 # -----------------------------
 # sections
 # -----------------------------
-def _add_data_overview(doc: Document, df_all: pd.DataFrame, df_work: pd.DataFrame):
-    doc.add_heading("Data Overview / 数据概览", level=2)
-    doc.add_paragraph(f"Total rows (raw): {len(df_all)}")
-    doc.add_paragraph(f"Rows used for clustering (after filter): {len(df_work)}")
+def _add_data_overview(doc: Document, df_all: pd.DataFrame, df_work: pd.DataFrame, translate_fn=None):
+    doc.add_heading(_tr("Data Overview / 数据概览", translate_fn), level=2)
+    doc.add_paragraph(_tr(f"Total rows (raw): {len(df_all)}", translate_fn))
+    doc.add_paragraph(_tr(f"Rows used for clustering (after filter): {len(df_work)}", translate_fn))
 
     # show key columns if present
     cols_preview = [c for c in ["_text", "sentiment", "cluster_id", "ASIN", "Star"] if c in df_all.columns]
     if cols_preview:
-        doc.add_paragraph(f"Key columns present: {', '.join(cols_preview)}")
+        doc.add_paragraph(_tr(f"Key columns present: {', '.join(cols_preview)}", translate_fn))
 
 
-def _add_sentiment_distribution(doc: Document, df_all: pd.DataFrame):
+def _add_sentiment_distribution(doc: Document, df_all: pd.DataFrame, translate_fn=None):
     if "sentiment" not in df_all.columns:
         return
-    doc.add_heading("Sentiment Distribution / 情感分布", level=2)
+    doc.add_heading(_tr("Sentiment Distribution / 情感分布", translate_fn), level=2)
     vc = df_all["sentiment"].value_counts(dropna=False).to_dict()
     doc.add_paragraph(str(vc))
 
 
-def _add_k_table(doc: Document, k_to_inertia: Dict[int, float], k_to_sil: Dict[int, float], k_best: int):
-    doc.add_heading("K Selection (Elbow + Silhouette) / K选择", level=2)
-    doc.add_paragraph(f"Recommended K = {k_best}")
+def _add_k_table(doc: Document, k_to_inertia: Dict[int, float], k_to_sil: Dict[int, float], k_best: int, translate_fn=None):
+    doc.add_heading(_tr("K Selection (Elbow + Silhouette) / K选择", translate_fn), level=2)
+    doc.add_paragraph(_tr(f"Recommended K = {k_best}", translate_fn))
 
     table = doc.add_table(rows=1, cols=3)
     hdr = table.rows[0].cells
-    hdr[0].text = "K"
-    hdr[1].text = "Inertia(SSE)"
-    hdr[2].text = "Silhouette"
+    hdr[0].text = _tr("K", translate_fn)
+    hdr[1].text = _tr("Inertia(SSE)", translate_fn)
+    hdr[2].text = _tr("Silhouette", translate_fn)
 
     ks = sorted(set(list(k_to_inertia.keys()) + list(k_to_sil.keys())))
     for k in ks:
         row = table.add_row().cells
-        row[0].text = f"{k}{' (best)' if int(k) == int(k_best) else ''}"
+        row[0].text = _tr(f"{k}{' (best)' if int(k) == int(k_best) else ''}", translate_fn)
         row[1].text = f"{float(k_to_inertia.get(k, 0.0)):.2f}"
         row[2].text = f"{float(k_to_sil.get(k, 0.0)):.4f}"
 
 
-def _add_cluster_summary(doc: Document, summary_df: Optional[pd.DataFrame]):
-    doc.add_heading("Cluster Summary / 聚类摘要", level=2)
+def _add_cluster_summary(doc: Document, summary_df: Optional[pd.DataFrame], translate_fn=None):
+    doc.add_heading(_tr("Cluster Summary / 聚类摘要", translate_fn), level=2)
 
     if summary_df is None or len(summary_df) == 0:
-        doc.add_paragraph("No cluster summary available.")
+        doc.add_paragraph(_tr("No cluster summary available.", translate_fn))
         return
 
     # 兼容列名：只要能拿到 cluster_id/size/ratio/keywords 就行
@@ -364,10 +378,10 @@ def _add_cluster_summary(doc: Document, summary_df: Optional[pd.DataFrame]):
 
     table = doc.add_table(rows=1, cols=4)
     hdr = table.rows[0].cells
-    hdr[0].text = "cluster_id"
-    hdr[1].text = "cluster_size"
-    hdr[2].text = "ratio"
-    hdr[3].text = "keywords"
+    hdr[0].text = _tr("cluster_id", translate_fn)
+    hdr[1].text = _tr("cluster_size", translate_fn)
+    hdr[2].text = _tr("ratio", translate_fn)
+    hdr[3].text = _tr("keywords", translate_fn)
 
     for _, r in summary_df.iterrows():
         row = table.add_row().cells
@@ -380,15 +394,15 @@ def _add_cluster_summary(doc: Document, summary_df: Optional[pd.DataFrame]):
         row[3].text = str(r.get(kw_col, "")) if kw_col else ""
 
 
-def _add_representatives(doc: Document, reps_df: Optional[pd.DataFrame], max_per_cluster: int = 3):
-    doc.add_heading("Representative Reviews / 代表评论", level=2)
+def _add_representatives(doc: Document, reps_df: Optional[pd.DataFrame], max_per_cluster: int = 3, translate_fn=None):
+    doc.add_heading(_tr("Representative Reviews / 代表评论", translate_fn), level=2)
 
     if reps_df is None or len(reps_df) == 0:
-        doc.add_paragraph("No representative reviews available.")
+        doc.add_paragraph(_tr("No representative reviews available.", translate_fn))
         return
 
     if "cluster_id" not in reps_df.columns:
-        doc.add_paragraph("Missing column: cluster_id in reps_df.")
+        doc.add_paragraph(_tr("Missing column: cluster_id in reps_df.", translate_fn))
         return
 
     # 兼容 rank 字段
@@ -410,7 +424,7 @@ def _add_representatives(doc: Document, reps_df: Optional[pd.DataFrame], max_per
     cluster_ids = sorted(pd.Series(reps_df["cluster_id"]).dropna().unique().tolist())
 
     for cid in cluster_ids:
-        doc.add_heading(f"Cluster {cid}", level=3)
+            doc.add_heading(_tr(f"Cluster {cid}", translate_fn), level=3)
         sub = reps_df[reps_df["cluster_id"] == cid].copy()
 
         if rank_col:
@@ -426,12 +440,12 @@ def _add_representatives(doc: Document, reps_df: Optional[pd.DataFrame], max_per
             star_v = r.get(star_col, "-") if star_col else "-"
             id_v = r.get(id_col, "-") if id_col else "-"
 
-            doc.add_paragraph(f"- (ASIN={asin_v}, Star={star_v}, id={id_v})")
+            doc.add_paragraph(_tr(f"- (ASIN={asin_v}, Star={star_v}, id={id_v})", translate_fn))
 
             text = str(r.get(text_col, "")) if text_col else ""
             text = (text or "").strip()
             if not text:
-                doc.add_paragraph("[EMPTY TEXT]")
+                doc.add_paragraph(_tr("[EMPTY TEXT]", translate_fn))
             else:
                 # 避免 Word 超长段落导致卡
                 doc.add_paragraph(text[:900] + ("..." if len(text) > 900 else ""))
@@ -441,6 +455,7 @@ def _add_asin_attribute_section(
     asin_attr_xlsx: Optional[str],
     asin_attr_share_png: Optional[str],
     asin_attr_pain_png: Optional[str],
+    translate_fn=None,
     key_findings_with_metrics: bool = False,   # ✅ 新增
 ):
     """
@@ -454,7 +469,7 @@ def _add_asin_attribute_section(
     if not (_safe_exists(asin_attr_xlsx) or _safe_exists(asin_attr_share_png) or _safe_exists(asin_attr_pain_png)):
         return
 
-    doc.add_heading("ASIN × Attribute Insights (Design Attributes) / 跨ASIN设计属性洞察", level=2)
+    doc.add_heading(_tr("ASIN × Attribute Insights (Design Attributes) / 跨ASIN设计属性洞察", translate_fn), level=2)
 
     # 1) taxonomy + opportunity（从xlsx读）
     if _safe_exists(asin_attr_xlsx):
@@ -469,10 +484,11 @@ def _add_asin_attribute_section(
                     tax,
                     heading="Attribute Taxonomy / 设计属性清单",
                     max_rows=40,
-                    max_cols=8
+                    max_cols=8,
+                    translate_fn=translate_fn
                 )
             else:
-                doc.add_paragraph("[WARN] Sheet missing: attribute_taxonomy")
+                doc.add_paragraph(_tr("[WARN] Sheet missing: attribute_taxonomy", translate_fn))
 
             # 1.2 opportunity
             if "opportunity_top" in xls.sheet_names:
@@ -482,10 +498,11 @@ def _add_asin_attribute_section(
                     opp,
                     heading="Opportunity Insights (Top) / 机会点总结（Top）",
                     max_rows=25,
-                    max_cols=10
+                    max_cols=10,
+                    translate_fn=translate_fn
                 )
             else:
-                doc.add_paragraph("[WARN] Sheet missing: opportunity_top")
+                doc.add_paragraph(_tr("[WARN] Sheet missing: opportunity_top", translate_fn))
 
             # 1.3 share/pain TopN（新增）
             share_pivot = None
@@ -494,56 +511,92 @@ def _add_asin_attribute_section(
             if "asin_attribute_share" in xls.sheet_names:
                 share_pivot = pd.read_excel(xls, sheet_name="asin_attribute_share", index_col=0)
             else:
-                doc.add_paragraph("[WARN] Sheet missing: asin_attribute_share")
+                doc.add_paragraph(_tr("[WARN] Sheet missing: asin_attribute_share", translate_fn))
 
             if "asin_attribute_pain" in xls.sheet_names:
                 pain_pivot = pd.read_excel(xls, sheet_name="asin_attribute_pain", index_col=0)
             else:
-                doc.add_paragraph("[WARN] Sheet missing: asin_attribute_pain")
+                doc.add_paragraph(_tr("[WARN] Sheet missing: asin_attribute_pain", translate_fn))
 
             # 全局TopN（Across ASIN）
             if share_pivot is not None and len(share_pivot) > 0:
                 g_share = _topn_global(share_pivot, n=10)
-                _add_df_table(doc, g_share, heading="Top Attributes by Share (Global) / 全局Top属性（占比）", max_rows=15, max_cols=6)
+                _add_df_table(
+                    doc,
+                    g_share,
+                    heading="Top Attributes by Share (Global) / 全局Top属性（占比）",
+                    max_rows=15,
+                    max_cols=6,
+                    translate_fn=translate_fn
+                )
 
             if pain_pivot is not None and len(pain_pivot) > 0:
                 g_pain = _topn_global(pain_pivot, n=10)
-                _add_df_table(doc, g_pain, heading="Top Attributes by Pain (Global) / 全局Top属性（痛点优先级）", max_rows=15, max_cols=6)
+                _add_df_table(
+                    doc,
+                    g_pain,
+                    heading="Top Attributes by Pain (Global) / 全局Top属性（痛点优先级）",
+                    max_rows=15,
+                    max_cols=6,
+                    translate_fn=translate_fn
+                )
 
             # 每个ASIN TopN（Per ASIN）
             if pain_pivot is not None and len(pain_pivot) > 0:
                 per_pain = _topn_per_asin(pain_pivot, n=5)
-                _add_df_table(doc, per_pain, heading="Top Pain Attributes per ASIN / 各ASIN Top痛点属性", max_rows=80, max_cols=6)
+                _add_df_table(
+                    doc,
+                    per_pain,
+                    heading="Top Pain Attributes per ASIN / 各ASIN Top痛点属性",
+                    max_rows=80,
+                    max_cols=6,
+                    translate_fn=translate_fn
+                )
 
             if share_pivot is not None and len(share_pivot) > 0:
                 per_share = _topn_per_asin(share_pivot, n=5)
-                _add_df_table(doc, per_share, heading="Top Share Attributes per ASIN / 各ASIN Top占比属性", max_rows=80, max_cols=6)
+                _add_df_table(
+                    doc,
+                    per_share,
+                    heading="Top Share Attributes per ASIN / 各ASIN Top占比属性",
+                    max_rows=80,
+                    max_cols=6,
+                    translate_fn=translate_fn
+                )
 
         except Exception as e:
-            doc.add_paragraph(f"[WARN] Failed to read asin_attribute_matrix.xlsx: {e}")
+            doc.add_paragraph(_tr(f"[WARN] Failed to read asin_attribute_matrix.xlsx: {e}", translate_fn))
 
     # 2) 两张热力图（share/pain）
     _add_picture_if_exists(
         doc,
         asin_attr_share_png,
         heading="ASIN × Attribute Share Heatmap / 属性强度热力图（占比）",
-        width_in=6.5
+        width_in=6.5,
+        translate_fn=translate_fn
     )
     _add_picture_if_exists(
         doc,
         asin_attr_pain_png,
         heading="ASIN × Attribute Pain Heatmap / 痛点优先级热力图",
-        width_in=6.5
+        width_in=6.5,
+        translate_fn=translate_fn
     )
 
     # 3) Key Findings（新增：自动总结）
     try:
         _add_key_findings(
-            doc, g_share=g_share, g_pain=g_pain, per_pain=per_pain, opp=opp, 
-            topk=3, show_metrics=key_findings_with_metrics
+            doc,
+            g_share=g_share,
+            g_pain=g_pain,
+            per_pain=per_pain,
+            opp=opp,
+            topk=3,
+            show_metrics=key_findings_with_metrics,
+            translate_fn=translate_fn
         )
     except Exception as e:
-        doc.add_paragraph(f"[WARN] Key Findings generation failed: {e}")
+        doc.add_paragraph(_tr(f"[WARN] Key Findings generation failed: {e}", translate_fn))
 
 # -----------------------------
 # main
@@ -567,6 +620,7 @@ def build_offline_report(
     asin_attr_share_png: Optional[str] = None,
     asin_attr_pain_png: Optional[str] = None,
     key_findings_with_metrics: bool = False,
+    translate_fn=None
 ) -> str:
     """
     生成离线 Word：不依赖任何 LLM，尽最大可能“永不崩溃”
@@ -591,42 +645,66 @@ def build_offline_report(
     doc = Document()
 
     # Title
-    doc.add_heading(title, level=1)
+    doc.add_heading(_tr(title, translate_fn), level=1)
     if subtitle:
-        doc.add_paragraph(subtitle)
+        doc.add_paragraph(_tr(subtitle, translate_fn))
     if author:
-        doc.add_paragraph(f"Author: {author}")
-    doc.add_paragraph(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        doc.add_paragraph(_tr(f"Author: {author}", translate_fn))
+    doc.add_paragraph(_tr(f"Generated at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", translate_fn))
 
     # Overview
-    _add_data_overview(doc, df_all, df_work)
-    _add_sentiment_distribution(doc, df_all)
+    _add_data_overview(doc, df_all, df_work, translate_fn=translate_fn)
+    _add_sentiment_distribution(doc, df_all, translate_fn=translate_fn)
 
     # K selection
-    _add_k_table(doc, k_to_inertia or {}, k_to_silhouette or {}, int(k_best))
+    _add_k_table(doc, k_to_inertia or {}, k_to_silhouette or {}, int(k_best), translate_fn=translate_fn)
 
     if _safe_exists(k_plot_png):
-        doc.add_paragraph("Legend:")
-        doc.add_paragraph("- Solid line: WCSS/Inertia (Elbow)")
-        doc.add_paragraph("- Dashed line: Silhouette score")
-        doc.add_paragraph("- Vertical line: recommended K")
-    _add_picture_if_exists(doc, k_plot_png, heading="K Selection Plot / K选择图", width_in=6.5)
+        doc.add_paragraph(_tr("Legend:", translate_fn))
+        doc.add_paragraph(_tr("- Solid line: WCSS/Inertia (Elbow)", translate_fn))
+        doc.add_paragraph(_tr("- Dashed line: Silhouette score", translate_fn))
+        doc.add_paragraph(_tr("- Vertical line: recommended K", translate_fn))
+    _add_picture_if_exists(
+        doc,
+        k_plot_png,
+        heading="K Selection Plot / K选择图",
+        width_in=6.5,
+        translate_fn=translate_fn
+    )
 
     # Cluster summary + reps
-    _add_cluster_summary(doc, cluster_summary)
-    _add_representatives(doc, reps_df, max_per_cluster=int(getattr(cfg, "top_representatives", 3)) or 3)
+    _add_cluster_summary(doc, cluster_summary, translate_fn=translate_fn)
+    _add_representatives(
+        doc,
+        reps_df,
+        max_per_cluster=int(getattr(cfg, "top_representatives", 3)) or 3,
+        translate_fn=translate_fn
+    )
 
     # Optional sections
-    _add_picture_if_exists(doc, asin_heatmap_png, heading="Cross-ASIN Comparison / 跨ASIN对比", width_in=6.5)
-    _add_picture_if_exists(doc, priority_png, heading="Priority Ranking / 优先级排序", width_in=6.5)
+    _add_picture_if_exists(
+        doc,
+        asin_heatmap_png,
+        heading="Cross-ASIN Comparison / 跨ASIN对比",
+        width_in=6.5,
+        translate_fn=translate_fn
+    )
+    _add_picture_if_exists(
+        doc,
+        priority_png,
+        heading="Priority Ranking / 优先级排序",
+        width_in=6.5,
+        translate_fn=translate_fn
+    )
     
     # ✅ 新增：ASIN×Attribute 核心升级（表 + 新热力图）
     _add_asin_attribute_section(
-    doc,
-    asin_attr_xlsx,
-    asin_attr_share_png,
-    asin_attr_pain_png,
-    key_findings_with_metrics=key_findings_with_metrics
+        doc,
+        asin_attr_xlsx,
+        asin_attr_share_png,
+        asin_attr_pain_png,
+        key_findings_with_metrics=key_findings_with_metrics,
+        translate_fn=translate_fn
     )
 
     # Save (never crash)

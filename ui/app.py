@@ -26,6 +26,8 @@ from core.representatives import top_representatives
 from core.robustness import clustering_stability
 
 from core.plot_k import recommend_k, plot_k_curves
+from core.plot_style import apply_matplotlib_style
+from core.translate import Translator
 from core.insights import asin_cluster_percent, plot_heatmap, cluster_priority, plot_priority,cluster_priority_safe
 
 from core.report_word import build_offline_report
@@ -51,6 +53,8 @@ class App(ttk.Frame):
 
         self.cfg.sentiment_model = resolve_path(getattr(self.cfg, "sentiment_model", "models/sentiment"))
         self.cfg.embedding_model = resolve_path(getattr(self.cfg, "embedding_model", "models/embedding"))
+        self.cfg.translate_model_zh_en = resolve_path(getattr(self.cfg, "translate_model_zh_en", "models/translate/zh_en"))
+        self.cfg.translate_model_en_zh = resolve_path(getattr(self.cfg, "translate_model_en_zh", "models/translate/en_zh"))
         self.sentiment_model_label_to_key = {}
         self.sentiment_model_key_to_label = {}
 
@@ -67,6 +71,7 @@ class App(ttk.Frame):
         self.k_scan = None
         self.cluster_keywords = None
         self.cluster_reps = None
+        self._translators = {}
         self.output_dir = os.path.join(os.getcwd(), "outputs")
         ensure_dir(self.output_dir)
 
@@ -134,6 +139,22 @@ class App(ttk.Frame):
         )
         self.lang_box.pack(side="left", padx=(6, 12))
         self.lang_box.bind("<<ComboboxSelected>>", self.on_language_changed)
+
+        # 输出语言（翻译输出）
+        ttk.Label(row2, text="输出语言:").pack(side="left")
+        self.output_lang_label_to_key = {"原文": "none", "中文": "zh", "英文": "en"}
+        self.output_lang_key_to_label = {v: k for k, v in self.output_lang_label_to_key.items()}
+        cur_out = (getattr(self.cfg, "output_language", "none") or "none").strip().lower()
+        self.output_lang_var = tk.StringVar(value=self.output_lang_key_to_label.get(cur_out, "原文"))
+        self.output_lang_box = ttk.Combobox(
+            row2,
+            textvariable=self.output_lang_var,
+            values=list(self.output_lang_label_to_key.keys()),
+            width=8,
+            state="readonly"
+        )
+        self.output_lang_box.pack(side="left", padx=(6, 12))
+        self.output_lang_box.bind("<<ComboboxSelected>>", self.on_output_language_changed)
 
         # 情感模型选择
         ttk.Label(row2, text="情感模型:").pack(side="left")
@@ -1111,12 +1132,31 @@ class App(ttk.Frame):
         rec = recommend_k(self.k_scan.k_to_silhouette)
         best_k = int(rec.best_k)
 
+        labels = {
+            "x_label": "K",
+            "y1_label": "WCSS / Inertia",
+            "y2_label": "Silhouette Score",
+            "line1_label": "WCSS/Inertia (Elbow) - solid (blue)",
+            "line2_label": "Silhouette Score - dashed (orange)",
+            "title": "Optimal K Selection (Elbow & Silhouette)",
+            "title_with_k": f"Optimal K Selection (Recommended K={best_k})",
+            "vline_label": f"Recommended K = {best_k} - vertical (green)",
+        }
+
+        out_lang = self._get_output_language()
+        if out_lang in {"zh", "en"}:
+            keys = list(labels.keys())
+            vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
+            labels = dict(zip(keys, vals))
+
         png_path = os.path.join(self.output_dir, "k_selection.png")
         plot_k_curves(
             self.k_scan.k_to_inertia,
             self.k_scan.k_to_silhouette,
-            best_k,
-            png_path
+            recommended_k=best_k,
+            save_path=png_path,
+            lang=self.cfg.text_language,
+            labels=labels
         )
 
         # 如果勾选了自动应用推荐K，则同步更新 Spinbox 显示
@@ -1215,7 +1255,24 @@ class App(ttk.Frame):
             self.asin_pivot = pivot_cluster
 
             old_png = os.path.join(out_dir, "asin_cluster_percent_heatmap.png")
-            fig = plot_heatmap(pivot_cluster, save_path=old_png, title="ASIN × Cluster Share (%)")
+            title_cluster = "ASIN × Cluster Share (%)"
+            out_lang = self._get_output_language()
+            if out_lang in {"zh", "en"}:
+                title_cluster = self._translate_texts_to([title_cluster], "en", out_lang)[0]
+
+            labels = {"x_label": "Cluster ID", "y_label": "ASIN"}
+            if out_lang in {"zh", "en"}:
+                keys = list(labels.keys())
+                vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
+                labels = dict(zip(keys, vals))
+
+            fig = plot_heatmap(
+                pivot_cluster,
+                save_path=old_png,
+                title=title_cluster,
+                lang=self.cfg.text_language,
+                labels=labels
+            )
             import matplotlib.pyplot as plt
             plt.close(fig)
 
@@ -1241,6 +1298,9 @@ class App(ttk.Frame):
             )
 
             taxonomy_df = build_attribute_taxonomy(cluster_keywords, topn=3)
+            if self._translation_needed() and "attribute_name" in taxonomy_df.columns:
+                taxonomy_df = taxonomy_df.copy()
+                taxonomy_df["attribute_name"] = self._translate_series(taxonomy_df["attribute_name"])
             share_pivot = asin_attribute_share(
                 df_clustered,
                 asin_col=asin_col,
@@ -1255,6 +1315,9 @@ class App(ttk.Frame):
                 taxonomy_df=taxonomy_df
             )
             opp_df = opportunity_insights(pain_pivot, topk=15)
+            if opp_df is not None and len(opp_df) > 0 and "attribute" in opp_df.columns and self._translation_needed():
+                opp_df = opp_df.copy()
+                opp_df["attribute"] = self._translate_series(opp_df["attribute"])
 
             out_xlsx = os.path.join(out_dir, "asin_attribute_matrix.xlsx")
             with pd.ExcelWriter(out_xlsx, engine="openpyxl") as writer:
@@ -1270,6 +1333,7 @@ class App(ttk.Frame):
             def _plot_heatmap(pivot_df: pd.DataFrame, title: str, out_png: str):
                 if pivot_df is None or pivot_df.shape[0] == 0 or pivot_df.shape[1] == 0:
                     return
+                apply_matplotlib_style(self.cfg.text_language)
                 fig = plt.figure(figsize=(12, max(4, 0.35 * pivot_df.shape[0])))
                 ax = fig.add_subplot(111)
                 data = pivot_df.values.astype(float)
@@ -1289,8 +1353,17 @@ class App(ttk.Frame):
 
             png_share = os.path.join(out_dir, "asin_attribute_share.png")
             png_pain  = os.path.join(out_dir, "asin_attribute_pain.png")
-            _plot_heatmap(share_pivot, "ASIN × Attribute Share (%)", png_share)
-            _plot_heatmap(pain_pivot,  "ASIN × Attribute Pain (Priority)", png_pain)
+            title_share = "ASIN × Attribute Share (%)"
+            title_pain = "ASIN × Attribute Pain (Priority)"
+            out_lang = self._get_output_language()
+            if out_lang in {"zh", "en"}:
+                title_share, title_pain = self._translate_texts_to(
+                    [title_share, title_pain],
+                    src_lang="en",
+                    tgt_lang=out_lang
+                )
+            _plot_heatmap(share_pivot, title_share, png_share)
+            _plot_heatmap(pain_pivot, title_pain, png_pain)
 
             # 给写报告用（下一步用）
             self.asin_attr_xlsx = out_xlsx
@@ -1371,7 +1444,18 @@ class App(ttk.Frame):
 
         # ===== 4. 导出 =====
         png_path = os.path.join(self.output_dir, "cluster_priority.png")
-        fig = plot_priority(pr, save_path=png_path)
+        labels = {
+            "x_label": "Cluster ID",
+            "y_label": "Priority Score",
+            "title": "Cluster Priority Ranking",
+        }
+        out_lang = self._get_output_language()
+        if out_lang in {"zh", "en"}:
+            keys = list(labels.keys())
+            vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
+            labels = dict(zip(keys, vals))
+
+        fig = plot_priority(pr, save_path=png_path, lang=self.cfg.text_language, labels=labels)
         import matplotlib.pyplot as plt
         plt.close(fig)
 
@@ -1439,6 +1523,19 @@ class App(ttk.Frame):
 
         reps_df = pd.DataFrame(rep_rows)
 
+        out_lang = self._get_output_language()
+        if self._translation_needed():
+            if "keywords" in summary.columns:
+                summary = summary.copy()
+                summary["keywords"] = self._translate_series(summary["keywords"])
+            if "review_text" in reps_df.columns:
+                reps_df = reps_df.copy()
+                reps_df["review_text"] = self._translate_series(reps_df["review_text"])
+
+        if out_lang in {"zh", "en"}:
+            summary.columns = self._translate_texts_to(list(summary.columns), src_lang="en", tgt_lang=out_lang)
+            reps_df.columns = self._translate_texts_to(list(reps_df.columns), src_lang="en", tgt_lang=out_lang)
+
         xlsx_path = os.path.join(self.output_dir, "results.xlsx")
         sheets = {"cluster_summary": summary, "representatives": reps_df}
 
@@ -1505,6 +1602,22 @@ class App(ttk.Frame):
                     })
             reps_df = pd.DataFrame(rep_rows)
 
+            if self._translation_needed():
+                if "keywords" in summary.columns:
+                    summary = summary.copy()
+                    summary["keywords"] = self._translate_series(summary["keywords"])
+                if "review_text" in reps_df.columns:
+                    reps_df = reps_df.copy()
+                    reps_df["review_text"] = self._translate_series(reps_df["review_text"])
+
+            out_lang = self._get_output_language()
+            def report_translate(texts):
+                if out_lang == "zh":
+                    return self._translate_texts_to(texts, src_lang="en", tgt_lang="zh")
+                if out_lang == "en":
+                    return self._translate_texts_to(texts, src_lang="zh", tgt_lang="en")
+                return texts
+
             # ====== 图/表路径（存在就插入） ======
             k_png = os.path.join(self.output_dir, "k_selection.png")
 
@@ -1543,6 +1656,7 @@ class App(ttk.Frame):
                 asin_attr_pain_png=attr_pain_png if os.path.exists(attr_pain_png) else None,
                 
                 key_findings_with_metrics=True,   # ✅ 论文版：带数值
+                translate_fn=report_translate
             )
 
             self._log(f"✅ Offline report generated: {out_path}")
@@ -1554,6 +1668,69 @@ class App(ttk.Frame):
         if not lang:
             return "en"
         return "zh" if lang.lower().startswith("zh") else "en"
+
+    def _get_output_language(self) -> str:
+        out = getattr(self.cfg, "output_language", "none")
+        return (out or "none").strip().lower()
+
+    def _translation_needed(self) -> bool:
+        out = self._get_output_language()
+        if out not in {"zh", "en"}:
+            return False
+        src = self._lang_bucket(getattr(self.cfg, "text_language", "en"))
+        return out != src
+
+    def _get_translator(self, src: str, tgt: str):
+        key = f"{src}->{tgt}"
+        if key in self._translators:
+            return self._translators[key]
+
+        if src == "zh" and tgt == "en":
+            model_path = getattr(self.cfg, "translate_model_zh_en", "")
+        else:
+            model_path = getattr(self.cfg, "translate_model_en_zh", "")
+
+        try:
+            translator = Translator(model_path, batch_size=getattr(self.cfg, "translate_batch_size", 16))
+        except Exception as e:
+            self._log(f"⚠️ Translator init failed: {e}")
+            return None
+
+        self._translators[key] = translator
+        return translator
+
+    def _translate_texts(self, texts):
+        if not texts:
+            return texts
+        if not self._translation_needed():
+            return texts
+
+        src = self._lang_bucket(getattr(self.cfg, "text_language", "en"))
+        tgt = self._get_output_language()
+        translator = self._get_translator(src, tgt)
+        if not translator:
+            return texts
+
+        return translator.translate(texts)
+
+    def _translate_texts_to(self, texts, src_lang: str, tgt_lang: str):
+        if not texts:
+            return texts
+        if tgt_lang not in {"zh", "en"} or src_lang == tgt_lang:
+            return texts
+        translator = self._get_translator(src_lang, tgt_lang)
+        if not translator:
+            return texts
+        return translator.translate(texts)
+
+    def _translate_series(self, s: pd.Series) -> pd.Series:
+        texts = ["" if pd.isna(v) else str(v) for v in s.tolist()]
+        translated = self._translate_texts(texts)
+        return pd.Series(translated, index=s.index)
+
+    def _translate_labels(self, labels):
+        texts = ["" if x is None else str(x) for x in labels]
+        return self._translate_texts(texts)
 
     def _sentiment_options_for_lang(self, lang: str):
         if self._lang_bucket(lang) == "zh":
@@ -1636,6 +1813,14 @@ class App(ttk.Frame):
 
         self._log(f"OK text_language set to: {self.cfg.text_language}")
         messagebox.showinfo("Saved", f"Text language set to: {self.cfg.text_language}\nWill be remembered next time.")
+
+    def on_output_language_changed(self, event=None):
+        label = (self.output_lang_var.get() or "").strip()
+        key = self.output_lang_label_to_key.get(label, "none")
+        self.cfg.output_language = key
+        save_user_settings({"output_language": key})
+        self._log(f"OK output_language set to: {key}")
+        messagebox.showinfo("Saved", f"Output language set to: {label}\nWill be remembered next time.")
 
     def on_sentiment_model_changed(self, event=None):
         label = self.sentiment_model_var.get().strip()
@@ -1733,6 +1918,8 @@ class App(ttk.Frame):
 
         emb_path = getattr(self.cfg, "embedding_model", None)
         sent_path = getattr(self.cfg, "sentiment_model", None)
+        trans_zh_en = getattr(self.cfg, "translate_model_zh_en", None)
+        trans_en_zh = getattr(self.cfg, "translate_model_en_zh", None)
 
         missing = []
 
@@ -1762,6 +1949,25 @@ class App(ttk.Frame):
                 self._log(f"? Sentiment ?????{sent_abs}")
             self.cfg.sentiment_model = sent_abs
 
+        # 2.5) translation models (optional, only if output_language enabled)
+        out_lang = self._get_output_language()
+        if out_lang in {"zh", "en"}:
+            for tag, path in [("Translate zh_en", trans_zh_en), ("Translate en_zh", trans_en_zh)]:
+                if not path:
+                    missing.append(f"{tag} path missing")
+                    continue
+                abs_path = path
+                if not os.path.isabs(abs_path):
+                    abs_path = os.path.join(base_dir, path)
+                if not os.path.isdir(abs_path):
+                    missing.append(f"{tag} missing: {abs_path}")
+                else:
+                    self._log(f"? {tag} OK: {abs_path}")
+                if "zh_en" in tag:
+                    self.cfg.translate_model_zh_en = abs_path
+                else:
+                    self.cfg.translate_model_en_zh = abs_path
+
         # 3) ?????????????./models/embedding ? ./models/sentiment/<key>
         # ?? config ?????????? fallback ?????????
         if emb_path in (None, "", "auto"):
@@ -1788,6 +1994,20 @@ class App(ttk.Frame):
                 self._log(f"? Sentiment ???????{default_sent}")
             else:
                 missing.append(f"Sentiment ????????{os.path.join(models_root, 'sentiment')}")
+
+        if out_lang in {"zh", "en"}:
+            default_zh_en = os.path.join(models_root, "translate", "zh_en")
+            default_en_zh = os.path.join(models_root, "translate", "en_zh")
+            if os.path.isdir(default_zh_en):
+                self.cfg.translate_model_zh_en = default_zh_en
+                self._log(f"? Translate zh_en default: {default_zh_en}")
+            else:
+                missing.append(f"Translate zh_en missing: {default_zh_en}")
+            if os.path.isdir(default_en_zh):
+                self.cfg.translate_model_en_zh = default_en_zh
+                self._log(f"? Translate en_zh default: {default_en_zh}")
+            else:
+                missing.append(f"Translate en_zh missing: {default_en_zh}")
 
         if missing:
             msg = (

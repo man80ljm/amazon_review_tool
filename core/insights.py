@@ -2,6 +2,7 @@
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
+from core.plot_style import apply_matplotlib_style
 
 import re
 
@@ -23,17 +24,29 @@ def asin_cluster_percent(df: pd.DataFrame, asin_col="ASIN", cluster_col="cluster
     pivot = pivot.sort_index()
     return pivot
 
-def plot_heatmap(pivot_percent: pd.DataFrame, save_path: str = None, title: str = None):
+def plot_heatmap(
+    pivot_percent: pd.DataFrame,
+    save_path: str = None,
+    title: str = None,
+    lang: str | None = None,
+    labels: dict | None = None
+):
     """把 ASIN×cluster 的占比画热力图"""
+    apply_matplotlib_style(lang)
+    labels = labels or {}
+    x_label = labels.get("x_label", "Cluster ID")
+    y_label = labels.get("y_label", "ASIN")
+    title_label = title or labels.get("title", "ASIN × Cluster Distribution (% within ASIN)")
+
     fig, ax = plt.subplots(figsize=(9, 4.5))
     im = ax.imshow(pivot_percent.values, aspect="auto")
     ax.set_xticks(range(pivot_percent.shape[1]))
     ax.set_xticklabels(pivot_percent.columns.tolist())
     ax.set_yticks(range(pivot_percent.shape[0]))
     ax.set_yticklabels(pivot_percent.index.tolist())
-    ax.set_xlabel("Cluster ID")
-    ax.set_ylabel("ASIN")
-    ax.set_title(title or "ASIN × Cluster Distribution (% within ASIN)")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(title_label)
     fig.colorbar(im, ax=ax, label="%")
     fig.tight_layout()
     if save_path:
@@ -58,12 +71,22 @@ def cluster_priority(df: pd.DataFrame, cluster_col="cluster_id", star_col="Star"
     out = out.sort_values("priority_score", ascending=False).reset_index(drop=True)
     return out
 
-def plot_priority(priority_df: pd.DataFrame, save_path: str = None):
+def plot_priority(
+    priority_df: pd.DataFrame,
+    save_path: str = None,
+    lang: str | None = None,
+    labels: dict | None = None
+):
     """
     🔥 修复：兼容两种列名
     - priority_score（旧版）
     - priority（新版 cluster_priority_safe）
     """
+    apply_matplotlib_style(lang)
+    labels = labels or {}
+    x_label = labels.get("x_label", "Cluster ID")
+    y_label = labels.get("y_label", "Priority Score")
+    title = labels.get("title", "Cluster Priority Ranking")
     fig, ax = plt.subplots(figsize=(8, 4.5))
     
     # 🔥 自动识别列名
@@ -93,9 +116,9 @@ def plot_priority(priority_df: pd.DataFrame, save_path: str = None):
         )
     
     ax.bar(priority_df[cid_col].astype(str), priority_df[score_col])
-    ax.set_xlabel("Cluster ID")
-    ax.set_ylabel("Priority Score")
-    ax.set_title("Cluster Priority Ranking")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(title)
     ax.grid(True, linestyle="--", alpha=0.3)
     fig.tight_layout()
     if save_path:

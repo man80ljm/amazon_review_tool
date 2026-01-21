@@ -70,6 +70,26 @@ def top_keywords_by_cluster(
 
     out: Dict[int, List[str]] = {}
 
+    def _safe_text(t) -> str:
+        if isinstance(t, str):
+            return t
+        if t is None:
+            return ""
+        try:
+            if isinstance(t, float) and np.isnan(t):
+                return ""
+            if np.isnan(t):
+                return ""
+        except Exception:
+            pass
+        return str(t)
+
+    texts = [_safe_text(t) for t in texts]
+    if not any(t.strip() for t in texts):
+        for c in sorted(set(labels.tolist())):
+            out[c] = []
+        return out
+
     if language.lower().startswith("zh"):
         vectorizer = TfidfVectorizer(
             max_features=8000,
