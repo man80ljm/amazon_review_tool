@@ -619,6 +619,7 @@ def build_offline_report(
     asin_attr_share_png: Optional[str] = None,
     asin_attr_pain_png: Optional[str] = None,
     key_findings_with_metrics: bool = False,
+    k_method_note: str | None = None,
     translate_fn=None
 ) -> str:
     """
@@ -657,6 +658,8 @@ def build_offline_report(
 
     # K selection
     _add_k_table(doc, k_to_inertia or {}, k_to_silhouette or {}, int(k_best), translate_fn=translate_fn)
+    if k_method_note:
+        doc.add_paragraph(_tr(k_method_note, translate_fn))
 
     if _safe_exists(k_plot_png):
         doc.add_paragraph(_tr("Legend:", translate_fn))

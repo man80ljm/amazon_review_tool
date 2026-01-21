@@ -11,7 +11,7 @@ def main():
     ttk.Style().theme_use("clam")  # 更稳定的主题
     cfg = AppConfig()
     app = App(root, cfg)
-    root.geometry("1100x650")
+    root.geometry("960x550")
     root.mainloop()
 
 def _tk_ex_handler(widget, exc, val, tb):

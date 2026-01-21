@@ -99,6 +99,9 @@ class AppConfig:
 
     k_min: int = 2
     k_max: int = 20
+    k_score_weight: float = 0.7
+    k_penalty_threshold: int = 12
+    k_penalty_strength: float = 0.02
     random_state: int = 42
 
     # Step5：聚类结果分析

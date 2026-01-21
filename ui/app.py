@@ -40,8 +40,8 @@ class App(ttk.Frame):
         self.cfg = cfg
 
         # ✅【加在这里】设置窗口默认大小
-        self.master.geometry("1660x900")   # 你可以改这个数
-        self.master.minsize(1250, 700)      # 可选：防止缩太小
+        self.master.geometry("960x550")   # 你可以改这个数
+        self.master.minsize(960, 550)      # 可选：防止缩太小
         
         # 加载本地 settings.json
         settings = load_user_settings()
@@ -215,6 +215,10 @@ class App(ttk.Frame):
         # Bottom controls
         bottom = ttk.Frame(self)
         bottom.pack(fill="x", padx=10, pady=6)
+        row1 = ttk.Frame(bottom)
+        row1.pack(fill="x")
+        row2 = ttk.Frame(bottom)
+        row2.pack(fill="x", pady=(4, 0))
 
         # ====== 阈值变量（从 cfg 读，确保 UI 打开就显示当前值）======
         self.star_th_var = tk.DoubleVar(value=float(getattr(self.cfg, "star_negative_threshold", 4.0)))
@@ -225,37 +229,64 @@ class App(ttk.Frame):
         self.fusion_w_sent_var = tk.DoubleVar(value=float(getattr(self.cfg, "fusion_w_sent", 1.0)))
         self.fusion_keep_var = tk.DoubleVar(value=float(getattr(self.cfg, "fusion_keep_threshold", 1.0)))
 
-        self.auto_apply_k = tk.BooleanVar(value=True)
-        ttk.Checkbutton(bottom, text="扫描后自动应用推荐K", variable=self.auto_apply_k).pack(side="left", padx=10)
+        # ====== K 推荐参数 ======
+        self.k_weight_var = tk.DoubleVar(value=float(getattr(self.cfg, "k_score_weight", 0.7)))
+        self.k_penalty_th_var = tk.IntVar(value=int(getattr(self.cfg, "k_penalty_threshold", 12)))
+        self.k_penalty_strength_var = tk.DoubleVar(value=float(getattr(self.cfg, "k_penalty_strength", 0.02)))
 
-        ttk.Label(bottom, text="聚类K:").pack(side="left")
+        self.auto_apply_k = tk.BooleanVar(value=True)
+        ttk.Checkbutton(row1, text="扫描后自动应用推荐K", variable=self.auto_apply_k).pack(side="left", padx=10)
+
+        ttk.Label(row1, text="聚类K:").pack(side="left")
         self.k_var = tk.IntVar(value=5)
         ttk.Spinbox(
-            bottom,
+            row1,
             from_=self.cfg.k_min,
             to=self.cfg.k_max,
             textvariable=self.k_var,
             width=5
         ).pack(side="left", padx=6)
 
+        # NOTE: comment text was garbled; replaced with English placeholder.
+        ttk.Label(row1, text="wK").pack(side="left", padx=(8, 2))
+        self.k_weight_spin = ttk.Spinbox(
+            row1, from_=0.0, to=1.0, increment=0.05,
+            textvariable=self.k_weight_var, width=4
+        )
+        self.k_weight_spin.pack(side="left")
+
+        ttk.Label(row1, text="K>=").pack(side="left", padx=(5, 2))
+        self.k_penalty_th_spin = ttk.Spinbox(
+            row1, from_=2, to=50, increment=1,
+            textvariable=self.k_penalty_th_var, width=4
+        )
+        self.k_penalty_th_spin.pack(side="left")
+
+        ttk.Label(row1, text="penalty").pack(side="left", padx=(5, 2))
+        self.k_penalty_strength_spin = ttk.Spinbox(
+            row1, from_=0.0, to=0.5, increment=0.01,
+            textvariable=self.k_penalty_strength_var, width=5
+        )
+        self.k_penalty_strength_spin.pack(side="left")
+
         # 仅分析负面
         self.only_negative = tk.BooleanVar(value=True)
         self.cb_only_negative = ttk.Checkbutton(
-            bottom,
+            row2,
             text="仅分析负面",
             variable=self.only_negative
         )
         self.cb_only_negative.pack(side="left", padx=10)
 
         # ===== 负面筛选策略（STAR / FUSION / SENTIMENT）=====
-        ttk.Label(bottom, text="负面判定:").pack(side="left", padx=(10, 4))
+        ttk.Label(row2, text="负面判定:").pack(side="left", padx=(10, 4))
 
         self.negative_mode_var = tk.StringVar(
             value=getattr(self.cfg, "negative_mode", "STAR_ONLY")
         )
 
         self.negative_mode_box = ttk.Combobox(
-            bottom,
+            row2,
             textvariable=self.negative_mode_var,
             values=["STAR_ONLY", "FUSION", "SENTIMENT_ONLY"],
             width=14,
@@ -269,39 +300,39 @@ class App(ttk.Frame):
         # =========================================================
         
         # 1. Star 阈值
-        ttk.Label(bottom, text="Star<=").pack(side="left", padx=(10, 2))
+        ttk.Label(row2, text="Star<=").pack(side="left", padx=(10, 2))
         self.star_th_spin = ttk.Spinbox(
-            bottom, from_=1.0, to=5.0, increment=0.5,
+            row2, from_=1.0, to=5.0, increment=0.5,
             textvariable=self.star_th_var, width=4
         )
         self.star_th_spin.pack(side="left")
 
         # 2. Conf 阈值
-        ttk.Label(bottom, text="Conf>=").pack(side="left", padx=(8, 2))
+        ttk.Label(row2, text="Conf>=").pack(side="left", padx=(8, 2))
         self.conf_th_spin = ttk.Spinbox(
-            bottom, from_=0.0, to=1.0, increment=0.05,
+            row2, from_=0.0, to=1.0, increment=0.05,
             textvariable=self.conf_th_var, width=4
         )
         self.conf_th_spin.pack(side="left")
 
         # 3. Fusion 参数 (W_Star, W_Sent, Keep)
-        ttk.Label(bottom, text="wStar").pack(side="left", padx=(8, 2))
+        ttk.Label(row2, text="wStar").pack(side="left", padx=(8, 2))
         self.fusion_w_star_spin = ttk.Spinbox(
-            bottom, from_=0.0, to=5.0, increment=0.1,
+            row2, from_=0.0, to=5.0, increment=0.1,
             textvariable=self.fusion_w_star_var, width=4
         )
         self.fusion_w_star_spin.pack(side="left")
 
-        ttk.Label(bottom, text="wSent").pack(side="left", padx=(5, 2))
+        ttk.Label(row2, text="wSent").pack(side="left", padx=(5, 2))
         self.fusion_w_sent_spin = ttk.Spinbox(
-            bottom, from_=0.0, to=5.0, increment=0.1,
+            row2, from_=0.0, to=5.0, increment=0.1,
             textvariable=self.fusion_w_sent_var, width=4
         )
         self.fusion_w_sent_spin.pack(side="left")
 
-        ttk.Label(bottom, text="Keep>=").pack(side="left", padx=(5, 2))
+        ttk.Label(row2, text="Keep>=").pack(side="left", padx=(5, 2))
         self.fusion_keep_spin = ttk.Spinbox(
-            bottom, from_=0.0, to=5.0, increment=0.1,
+            row2, from_=0.0, to=5.0, increment=0.1,
             textvariable=self.fusion_keep_var, width=4
         )
         self.fusion_keep_spin.pack(side="left")
@@ -309,7 +340,7 @@ class App(ttk.Frame):
         # =========================================================
 
         self.btn_run_cluster = ttk.Button(
-            bottom,
+            row2,
             text="仅重跑 Step4-5",
             command=self.on_run_cluster_only
         )
@@ -325,6 +356,10 @@ class App(ttk.Frame):
         _bind_save(self.fusion_w_star_spin, self.on_thresholds_changed)
         _bind_save(self.fusion_w_sent_spin, self.on_thresholds_changed)
         _bind_save(self.fusion_keep_spin, self.on_thresholds_changed)
+        _bind_save(self.k_weight_spin, self.on_thresholds_changed)
+        _bind_save(self.k_penalty_th_spin, self.on_thresholds_changed)
+        _bind_save(self.k_penalty_strength_spin, self.on_thresholds_changed)
+
 
     def _set_progress(self, cur, total, msg):
         """线程安全进度更新：后台线程调用也不会碰 Tk。"""
@@ -404,6 +439,7 @@ class App(ttk.Frame):
             self.btn_kplot.config(state=state)
             self.btn_compare.config(state=state)
             self.btn_priority.config(state=state)
+            self.btn_report_offline.config(state=state)
             self.btn_import.config(state=state)
         except Exception:
             # 如果你没保存按钮引用，也没关系：至少防止线程重入
@@ -922,10 +958,16 @@ class App(ttk.Frame):
         )
         self._log(f"K scan done. range=[{self.cfg.k_min},{self.cfg.k_max}]")
 
-        rec = recommend_k(self.k_scan.k_to_silhouette)
+        rec = recommend_k(
+                self.k_scan.k_to_inertia,
+                self.k_scan.k_to_silhouette,
+                weight=getattr(self.cfg, "k_score_weight", 0.7),
+                penalty_threshold=getattr(self.cfg, "k_penalty_threshold", 12),
+                penalty_strength=getattr(self.cfg, "k_penalty_strength", 0.02)
+            )
         self.k_best = int(rec.best_k)
         score = self.k_scan.k_to_silhouette.get(rec.best_k, float("nan"))
-        self._log(f"Recommended K by silhouette = {self.k_best} (score={score:.4f})")
+        self._log(f"Recommended K by {rec.method} = {self.k_best} (score={rec.score})")
 
         # 你原来会渲染 K 扫描结果（注意：此函数内部必须线程安全）
         try:
@@ -1126,13 +1168,19 @@ class App(ttk.Frame):
 
     def on_plot_k(self):
         if self.k_scan is None:
-            messagebox.showwarning("??", "?????????????K???")
+            messagebox.showwarning("Warning", "Please run the full pipeline (at least through K scan).")
             return
 
         def job():
             self._set_progress(0, 1, "Generating K selection plot...")
 
-            rec = recommend_k(self.k_scan.k_to_silhouette)
+            rec = recommend_k(
+                self.k_scan.k_to_inertia,
+                self.k_scan.k_to_silhouette,
+                weight=getattr(self.cfg, "k_score_weight", 0.7),
+                penalty_threshold=getattr(self.cfg, "k_penalty_threshold", 12),
+                penalty_strength=getattr(self.cfg, "k_penalty_strength", 0.02)
+            )
             best_k = int(rec.best_k)
 
             labels = {
@@ -1177,40 +1225,31 @@ class App(ttk.Frame):
 
                 self._set_progress(1, 1, "K selection plot ready.")
                 messagebox.showinfo(
-                    "??",
-                    f"K???????
-{png_path}
-
-"
-                    f"??K={best_k}
-??K={cur_k}
-
-"
-                    f"???????????????Step4-5????K???"
+                    "Done",
+                    f"K plot exported:\n{png_path}\n\n"
+                    f"Recommended K={best_k}\nCurrent K={cur_k}\n\n"
+                    "If you want to update clustering, re-run Step4-5 with current K."
                 )
 
             self._ui(done)
 
         self._run_in_thread(job, "Generating K selection plot...")
-
     def on_asin_compare(self):
         """
-        ?ASIN???????+??????
-        ??
-        - ASIN?Cluster ????? + csv
-        ??
-        - Attribute Taxonomy
-        - ASIN?Attribute share% ???
-        - ASIN?Attribute pain ???
-        - Opportunity Insights
-        - ???asin_attribute_matrix.xlsx
+        Cross-ASIN outputs:
+        - ASINCluster heatmap + csv
+        - Attribute taxonomy
+        - ASINAttribute share heatmap
+        - ASINAttribute pain heatmap
+        - Opportunity insights
+        - Export: asin_attribute_matrix.xlsx
         """
         import os
         import pandas as pd
         from tkinter import messagebox
 
         if self.df_work is None or "cluster_id" not in self.df_work.columns:
-            messagebox.showwarning("??", "???????Step4-5?")
+            messagebox.showwarning("Warning", "Please finish clustering (Step4-5) first.")
             return
 
         def job():
@@ -1229,10 +1268,9 @@ class App(ttk.Frame):
 
                 if asin_col not in df_clustered.columns:
                     self._ui(lambda: messagebox.showwarning(
-                        "??",
-                        f"???ASIN???????{asin_col}??
-"
-                        "????????ASIN??????????/field_map?"
+                        "Warning",
+                        f"Missing ASIN column (current: {asin_col}).\n"
+                        "Please check your data or field_map."
                     ))
                     return
 
@@ -1245,7 +1283,7 @@ class App(ttk.Frame):
                     star_col = "_score" if "_score" in df_clustered.columns else ("Star" if "Star" in df_clustered.columns else None)
 
                 if star_col is None or star_col not in df_clustered.columns:
-                    self._ui(lambda: messagebox.showwarning("??", "??????Star/_score?????? pain ? Priority?"))
+                    self._ui(lambda: messagebox.showwarning("Warning", "Missing Star/_score column; cannot compute pain/priority."))
                     return
 
                 cluster_keywords = getattr(self, "cluster_keywords", None)
@@ -1255,7 +1293,7 @@ class App(ttk.Frame):
                         cluster_keywords = dict(zip(cs["cluster_id"].tolist(), cs["keywords"].tolist()))
 
                 if not cluster_keywords:
-                    self._ui(lambda: messagebox.showwarning("??", "???? cluster_keywords???? Step5 ???????"))
+                    self._ui(lambda: messagebox.showwarning("Warning", "Missing cluster_keywords. Run Step5 first."))
                     return
 
                 out_dir = getattr(self, "output_dir", None) or os.path.join(os.getcwd(), "outputs")
@@ -1271,11 +1309,11 @@ class App(ttk.Frame):
                     asin_label_map = dict(zip(asin_vals, asin_trans))
                     pivot_cluster = pivot_cluster.copy()
                     pivot_cluster.index = [asin_label_map.get(str(v), str(v)) for v in pivot_cluster.index]
+
                 self.asin_pivot = pivot_cluster
 
                 old_png = os.path.join(out_dir, "asin_cluster_percent_heatmap.png")
-                title_cluster = "ASIN ? Cluster Share (%)"
-                out_lang = self._get_output_language()
+                title_cluster = "ASIN  Cluster Share (%)"
                 if out_lang in {"zh", "en"}:
                     title_cluster = self._translate_texts_to([title_cluster], "en", out_lang)[0]
 
@@ -1366,8 +1404,8 @@ class App(ttk.Frame):
 
                 png_share = os.path.join(out_dir, "asin_attribute_share.png")
                 png_pain  = os.path.join(out_dir, "asin_attribute_pain.png")
-                title_share = "ASIN ? Attribute Share (%)"
-                title_pain = "ASIN ? Attribute Pain (Priority)"
+                title_share = "ASIN  Attribute Share (%)"
+                title_pain = "ASIN  Attribute Pain (Priority)"
                 if out_lang in {"zh", "en"}:
                     title_share, title_pain = self._translate_texts_to(
                         [title_share, title_pain],
@@ -1380,30 +1418,22 @@ class App(ttk.Frame):
 
                 self._set_progress(1, 1, "Cross-ASIN outputs ready.")
                 self._ui(lambda: messagebox.showinfo(
-                    "??",
-                    "?ASIN??????
-"
-                    f"[?] ????{old_png}
-"
-                    f"[?] CSV?{old_csv}
-
-"
-                    f"[?] Excel?{out_xlsx}
-"
-                    f"[?] Share????{png_share}
-"
-                    f"[?] Pain????{png_pain}
-"
+                    "Done",
+                    "Cross-ASIN outputs saved:\n"
+                    f"[Old] Heatmap: {old_png}\n"
+                    f"[Old] CSV: {old_csv}\n\n"
+                    f"[New] Excel: {out_xlsx}\n"
+                    f"[New] Share heatmap: {png_share}\n"
+                    f"[New] Pain heatmap: {png_pain}\n"
                 ))
 
             except Exception as e:
-                self._ui(lambda: messagebox.showwarning("??", f"?ASIN???????{e}"))
+                self._ui(lambda: messagebox.showwarning("Warning", f"Cross-ASIN generation failed: {e}"))
 
         self._run_in_thread(job, "Generating cross-ASIN outputs...")
-
     def on_priority(self):
         if self.df_work is None or "cluster_id" not in self.df_work.columns:
-            messagebox.showwarning("??", "???????Step4-5?")
+            messagebox.showwarning("Warning", "Please finish clustering (Step4-5) first.")
             return
 
         def job():
@@ -1411,7 +1441,7 @@ class App(ttk.Frame):
             df = self.df_work.copy()
 
             group_col = None
-            for cand in ["ASIN", "asin", "????", "place", "group"]:
+            for cand in ["ASIN", "asin", "", "place", "group"]:
                 if cand in df.columns:
                     group_col = cand
                     break
@@ -1430,10 +1460,9 @@ class App(ttk.Frame):
 
             if star_col not in df.columns:
                 self._ui(lambda: messagebox.showwarning(
-                    "??",
-                    f"????????????{star_col}??
-"
-                    "???????? Star/Rating??????????/field_map?"
+                    "Warning",
+                    f"Missing rating column (current: {star_col}).\n"
+                    "Please check Star/Rating or field_map."
                 ))
                 return
 
@@ -1466,18 +1495,19 @@ class App(ttk.Frame):
             pr.to_csv(csv_path, index=False, encoding="utf-8-sig")
 
             self._set_progress(1, 1, "Priority outputs ready.")
-            self._ui(lambda: messagebox.showinfo("??", f"?????????
-{png_path}
-{csv_path}"))
+            self._ui(lambda: messagebox.showinfo(
+                "Done",
+                f"Priority outputs saved:\n{png_path}\n{csv_path}"
+            ))
 
         self._run_in_thread(job, "Generating priority outputs...")
 
     def on_export(self):
         if self.df_work is None or self.labels is None:
-            messagebox.showwarning("??", "????????????")
+            messagebox.showwarning("Warning", "Please run the pipeline to get clustering results first.")
             return
         if "cluster_id" not in self.df_work.columns:
-            messagebox.showwarning("??", "?? df_work ?? cluster_id?????Step4-5")
+            messagebox.showwarning("Warning", "cluster_id missing in df_work; re-run Step4-5.")
             return
 
         def job():
@@ -1553,9 +1583,10 @@ class App(ttk.Frame):
             save_excel(sheets, xlsx_path)
 
             self._set_progress(1, 1, "Export complete.")
-            self._ui(lambda: messagebox.showinfo("????", f"????
-- {detail_path}
-- {xlsx_path}"))
+            self._ui(lambda: messagebox.showinfo(
+                "Export complete",
+                f"Exported files:\n- {detail_path}\n- {xlsx_path}"
+            ))
 
         self._run_in_thread(job, "Exporting results...")
 
@@ -1642,7 +1673,37 @@ class App(ttk.Frame):
             attr_share_png = os.path.join(self.output_dir, "asin_attribute_share.png")
             attr_pain_png  = os.path.join(self.output_dir, "asin_attribute_pain.png")
 
-            rec = recommend_k(self.k_scan.k_to_silhouette)
+            rec = recommend_k(
+                self.k_scan.k_to_inertia,
+                self.k_scan.k_to_silhouette,
+                weight=getattr(self.cfg, "k_score_weight", 0.7),
+                penalty_threshold=getattr(self.cfg, "k_penalty_threshold", 12),
+                penalty_strength=getattr(self.cfg, "k_penalty_strength", 0.02)
+            )
+            w = getattr(self.cfg, "k_score_weight", 0.7)
+            th = getattr(self.cfg, "k_penalty_threshold", 12)
+            ps = getattr(self.cfg, "k_penalty_strength", 0.02)
+            k_note_en = (
+                "K selection uses a composite score: "
+                "score = w*silhouette_norm + (1-w)*elbow_norm - penalty. "
+                f"penalty = max(0, k - {th})*{ps}. "
+                f"Params: w={w:.2f}, threshold={th}, strength={ps:.3f}. "
+                f"Recommended K={int(rec.best_k)}."
+            )
+            k_note_zh = (
+                "K"
+                "score = w*silhouette_norm + (1-w)*elbow_norm - penalty"
+                f"penalty = max(0, k - {th})*{ps}"
+                f"w={w:.2f}={th}={ps:.3f}"
+                f"K={int(rec.best_k)}"
+            )
+            out_lang = self._get_output_language()
+            if out_lang == "zh":
+                k_method_note = k_note_en
+            elif out_lang == "en":
+                k_method_note = k_note_zh
+            else:
+                k_method_note = k_note_zh if self._lang_bucket(self.cfg.text_language) == "zh" else k_note_en
 
             out_path = build_offline_report(
                 cfg=self.cfg,
@@ -1912,17 +1973,17 @@ class App(ttk.Frame):
 
     def pre_download_models(self):
         """
-        ????-????????????????????????huggingface???
-        ???????exe ??????????
+        -huggingface
+        exe 
         ./models/
-            embedding/  (??????)
-            sentiment/<key>/  (??????)
+            embedding/  ()
+            sentiment/<key>/  ()
 
-        config ???
+        config 
         cfg.embedding_model = "./models/embedding"
-        cfg.sentiment_model = "./models/sentiment/<key>"   # ??????
+        cfg.sentiment_model = "./models/sentiment/<key>"   # 
         """
-        # ???????????exe ???/ ??????
+        # NOTE: comment text was garbled; replaced with English placeholder.
         base_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
         models_root = os.path.join(base_dir, "models")
 
@@ -1933,30 +1994,30 @@ class App(ttk.Frame):
 
         missing = []
 
-        # 1) embedding????
+        # NOTE: comment text was garbled; replaced with English placeholder.
         if not emb_path:
-            missing.append("embedding_model?????")
+            missing.append("embedding_model")
         else:
-            # ?????????????????exe/?????
+            # NOTE: comment text was garbled; replaced with English placeholder.
             emb_abs = emb_path
             if not os.path.isabs(emb_abs):
                 emb_abs = os.path.join(base_dir, emb_path)
             if not os.path.isdir(emb_abs):
-                missing.append(f"Embedding ????????{emb_abs}")
+                missing.append(f"Embedding {emb_abs}")
             else:
-                self._log(f"? Embedding ?????{emb_abs}")
-            # ?? cfg?????????????
+                self._log(f" Embedding {emb_abs}")
+            # NOTE: comment text was garbled; replaced with English placeholder.
             self.cfg.embedding_model = emb_abs
 
-        # 2) sentiment???????????????????????
+        # NOTE: comment text was garbled; replaced with English placeholder.
         if sent_path:
             sent_abs = sent_path
             if not os.path.isabs(sent_abs):
                 sent_abs = os.path.join(base_dir, sent_path)
             if not os.path.isdir(sent_abs):
-                missing.append(f"Sentiment ????????{sent_abs}")
+                missing.append(f"Sentiment {sent_abs}")
             else:
-                self._log(f"? Sentiment ?????{sent_abs}")
+                self._log(f" Sentiment {sent_abs}")
             self.cfg.sentiment_model = sent_abs
 
         # 2.5) translation models (optional, only if output_language enabled)
@@ -1972,21 +2033,21 @@ class App(ttk.Frame):
                 if not os.path.isdir(abs_path):
                     missing.append(f"{tag} missing: {abs_path}")
                 else:
-                    self._log(f"? {tag} OK: {abs_path}")
+                    self._log(f" {tag} OK: {abs_path}")
                 if "zh_en" in tag:
                     self.cfg.translate_model_zh_en = abs_path
                 else:
                     self.cfg.translate_model_en_zh = abs_path
 
-        # 3) ?????????????./models/embedding ? ./models/sentiment/<key>
-        # ?? config ?????????? fallback ?????????
+        # NOTE: comment text was garbled; replaced with English placeholder.
+        # NOTE: comment text was garbled; replaced with English placeholder.
         if emb_path in (None, "", "auto"):
             default_emb = os.path.join(models_root, "embedding")
             if os.path.isdir(default_emb):
                 self.cfg.embedding_model = default_emb
-                self._log(f"? Embedding ???????{default_emb}")
+                self._log(f" Embedding {default_emb}")
             else:
-                missing.append(f"Embedding ????????{default_emb}")
+                missing.append(f"Embedding {default_emb}")
 
         if sent_path in (None, "", "auto"):
             key = getattr(self.cfg, "sentiment_model_key", "") or ""
@@ -2001,21 +2062,21 @@ class App(ttk.Frame):
                     default_sent = legacy
             if default_sent:
                 self.cfg.sentiment_model = default_sent
-                self._log(f"? Sentiment ???????{default_sent}")
+                self._log(f" Sentiment {default_sent}")
             else:
-                missing.append(f"Sentiment ????????{os.path.join(models_root, 'sentiment')}")
+                missing.append(f"Sentiment {os.path.join(models_root, 'sentiment')}")
 
         if out_lang in {"zh", "en"}:
             default_zh_en = os.path.join(models_root, "translate", "zh_en")
             default_en_zh = os.path.join(models_root, "translate", "en_zh")
             if os.path.isdir(default_zh_en):
                 self.cfg.translate_model_zh_en = default_zh_en
-                self._log(f"? Translate zh_en default: {default_zh_en}")
+                self._log(f" Translate zh_en default: {default_zh_en}")
             else:
                 missing.append(f"Translate zh_en missing: {default_zh_en}")
             if os.path.isdir(default_en_zh):
                 self.cfg.translate_model_en_zh = default_en_zh
-                self._log(f"? Translate en_zh default: {default_en_zh}")
+                self._log(f" Translate en_zh default: {default_en_zh}")
             else:
                 missing.append(f"Translate en_zh missing: {default_en_zh}")
 
