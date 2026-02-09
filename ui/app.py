@@ -20,12 +20,18 @@ from config import AppConfig
 from core.io_utils import load_file, save_csv, save_excel, ensure_dir
 from core.sentiment import SentimentAnalyzer
 from core.embedding import Embedder
-from core.clustering import scan_k, fit_kmeans
+from core.clustering import (
+    scan_k,
+    fit_kmeans,
+    run_clustering,
+    scan_k_agglomerative,
+    compute_cluster_metrics,
+)
 from core.keywords import top_keywords_by_cluster
 from core.representatives import top_representatives
 from core.robustness import clustering_stability
 
-from core.plot_k import recommend_k, plot_k_curves
+from core.plot_k import recommend_k, plot_k_curves, plot_silhouette_ch_curves
 from core.plot_style import apply_matplotlib_style
 from core.translate import Translator
 from core.insights import asin_cluster_percent, plot_heatmap, cluster_priority, plot_priority,cluster_priority_safe
@@ -71,6 +77,10 @@ class App(ttk.Frame):
         self.k_scan = None
         self.cluster_keywords = None
         self.cluster_reps = None
+        self.cluster_meta = None
+        self.cluster_metrics = None
+        self.cluster_method = getattr(self.cfg, "clustering_method", "KMeans")
+        self.noise_label = -1
         self._translators = {}
         self.output_dir = os.path.join(os.getcwd(), "outputs")
         ensure_dir(self.output_dir)
@@ -269,6 +279,19 @@ class App(ttk.Frame):
         )
         self.k_penalty_strength_spin.pack(side="left")
 
+        # Clustering method
+        ttk.Label(row1, text="Clustering:").pack(side="left", padx=(12, 4))
+        self.cluster_method_var = tk.StringVar(value=getattr(self.cfg, "clustering_method", "KMeans"))
+        self.cluster_method_box = ttk.Combobox(
+            row1,
+            textvariable=self.cluster_method_var,
+            values=["KMeans", "DBSCAN", "Agglomerative"],
+            width=14,
+            state="readonly"
+        )
+        self.cluster_method_box.pack(side="left")
+        self.cluster_method_box.bind("<<ComboboxSelected>>", self.on_clustering_method_changed)
+
         # 仅分析负面
         self.only_negative = tk.BooleanVar(value=True)
         self.cb_only_negative = ttk.Checkbutton(
@@ -346,6 +369,74 @@ class App(ttk.Frame):
         )
         self.btn_run_cluster.pack(side="right", padx=(10, 0))
 
+        # ====== Row3: clustering params ======
+        row3 = ttk.Frame(bottom)
+        row3.pack(fill="x", pady=(4, 0))
+
+        # DBSCAN params
+        self.dbscan_eps_var = tk.DoubleVar(value=float(getattr(self.cfg, "dbscan_eps", 0.5)))
+        self.dbscan_min_samples_var = tk.IntVar(value=int(getattr(self.cfg, "dbscan_min_samples", 5)))
+        self.dbscan_include_noise_var = tk.BooleanVar(
+            value=(getattr(self.cfg, "dbscan_noise_handling", "exclude") == "keep")
+        )
+
+        ttk.Label(row3, text="DBSCAN eps:").pack(side="left")
+        self.dbscan_eps_spin = ttk.Spinbox(
+            row3, from_=0.01, to=10.0, increment=0.05,
+            textvariable=self.dbscan_eps_var, width=6
+        )
+        self.dbscan_eps_spin.pack(side="left", padx=(4, 12))
+
+        ttk.Label(row3, text="min_samples:").pack(side="left")
+        self.dbscan_min_samples_spin = ttk.Spinbox(
+            row3, from_=2, to=100, increment=1,
+            textvariable=self.dbscan_min_samples_var, width=6
+        )
+        self.dbscan_min_samples_spin.pack(side="left", padx=(4, 12))
+
+        self.dbscan_noise_cb = ttk.Checkbutton(
+            row3,
+            text="Include noise in downstream",
+            variable=self.dbscan_include_noise_var,
+            command=self.on_clustering_params_changed
+        )
+        self.dbscan_noise_cb.pack(side="left", padx=(4, 12))
+
+        # Agglomerative params
+        self.agg_linkage_var = tk.StringVar(value=getattr(self.cfg, "agg_linkage", "ward"))
+        self.agg_metric_var = tk.StringVar(value=getattr(self.cfg, "agg_metric", "euclidean"))
+
+        ttk.Label(row3, text="Agg linkage:").pack(side="left")
+        self.agg_linkage_box = ttk.Combobox(
+            row3,
+            textvariable=self.agg_linkage_var,
+            values=["ward", "average", "complete"],
+            width=10,
+            state="readonly"
+        )
+        self.agg_linkage_box.pack(side="left", padx=(4, 12))
+        self.agg_linkage_box.bind("<<ComboboxSelected>>", self.on_clustering_params_changed)
+
+        ttk.Label(row3, text="Agg metric:").pack(side="left")
+        self.agg_metric_box = ttk.Combobox(
+            row3,
+            textvariable=self.agg_metric_var,
+            values=["euclidean", "cosine"],
+            width=10,
+            state="readonly"
+        )
+        self.agg_metric_box.pack(side="left", padx=(4, 12))
+        self.agg_metric_box.bind("<<ComboboxSelected>>", self.on_clustering_params_changed)
+
+        # Metrics sampling
+        self.metrics_sample_size_var = tk.IntVar(value=int(getattr(self.cfg, "metrics_sample_size", 2000)))
+        ttk.Label(row3, text="Metrics sample:").pack(side="left")
+        self.metrics_sample_spin = ttk.Spinbox(
+            row3, from_=200, to=20000, increment=200,
+            textvariable=self.metrics_sample_size_var, width=7
+        )
+        self.metrics_sample_spin.pack(side="left", padx=(4, 0))
+
         # 🔥 绑定自动保存事件 (回车 OR 失去焦点)
         def _bind_save(widget, func):
             widget.bind("<Return>", func)
@@ -359,6 +450,11 @@ class App(ttk.Frame):
         _bind_save(self.k_weight_spin, self.on_thresholds_changed)
         _bind_save(self.k_penalty_th_spin, self.on_thresholds_changed)
         _bind_save(self.k_penalty_strength_spin, self.on_thresholds_changed)
+        _bind_save(self.dbscan_eps_spin, self.on_clustering_params_changed)
+        _bind_save(self.dbscan_min_samples_spin, self.on_clustering_params_changed)
+        _bind_save(self.metrics_sample_spin, self.on_clustering_params_changed)
+
+        self._update_clustering_param_visibility()
 
 
     def _set_progress(self, cur, total, msg):
@@ -465,6 +561,8 @@ class App(ttk.Frame):
             self.k_scan = None
             self.cluster_keywords = None
             self.cluster_reps = None
+            self.cluster_meta = None
+            self.cluster_metrics = None
 
             # ========= 2) 自动识别列名（关键新增） =========
             self._auto_map_fields(self.df)
@@ -660,23 +758,57 @@ class App(ttk.Frame):
         self.artifacts_dirty = True
 
         def job():
-            self.k_used = int(self.k_var.get())
-            self._log(f"Re-run clustering with K={self.k_used}")
+            method = self._get_clustering_method()
+            self.cluster_method = method
+            self._log(f"Re-run clustering with method={method}")
 
-            # Step4
-            self.labels, self.centers = fit_kmeans(
+            if method in ("KMeans", "Agglomerative"):
+                self.k_used = int(self.k_var.get())
+                self._log(f"Re-run clustering with K={self.k_used}")
+
+            params = self._get_clustering_params()
+            if method in ("KMeans", "Agglomerative"):
+                params["n_clusters"] = int(self.k_used)
+
+            self.labels, self.cluster_meta = run_clustering(
                 self.emb,
-                k=self.k_used,
+                method=method,
+                params=params,
                 random_state=self.cfg.random_state
             )
+            self.centers = self.cluster_meta.get("centers")
             self.df_work["cluster_id"] = self.labels
+
+            metric_name = params.get("metric", "euclidean")
+            sample_size = int(getattr(self.cfg, "metrics_sample_size", 2000))
+            self.cluster_metrics = compute_cluster_metrics(
+                self.emb,
+                self.labels,
+                noise_label=self.noise_label,
+                sample_size=sample_size,
+                random_state=self.cfg.random_state,
+                metric=metric_name
+            )
+            if self.cluster_meta:
+                self._log(f"Noise ratio: {self.cluster_meta.get('noise_ratio')}")
+            if self.cluster_metrics:
+                self._log(
+                    "Metrics: "
+                    f"silhouette={self.cluster_metrics.get('silhouette')} | "
+                    f"CH={self.cluster_metrics.get('calinski_harabasz')} | "
+                    f"DB={self.cluster_metrics.get('davies_bouldin')}"
+                )
+
+            noise_handling = getattr(self.cfg, "dbscan_noise_handling", "exclude")
+            noise_label = self.noise_label if (method == "DBSCAN" and noise_handling == "exclude") else None
 
             # Step5: keywords
             self.cluster_keywords = top_keywords_by_cluster(
                 self.df_work[self.cfg.field_map["text"]].tolist(),
                 self.labels,
                 top_n=self.cfg.top_keywords,
-                language=self.cfg.text_language
+                language=self.cfg.text_language,
+                noise_label=noise_label
             )
 
             # Step5: reps
@@ -684,7 +816,8 @@ class App(ttk.Frame):
                 self.emb,
                 self.labels,
                 self.centers,
-                top_n=self.cfg.top_representatives
+                top_n=self.cfg.top_representatives,
+                noise_label=noise_label
             )
 
             # ★关键：报告/导出依赖这个
@@ -700,11 +833,15 @@ class App(ttk.Frame):
             self.reps_df = pd.DataFrame(rows)
 
             # summary
-            cluster_sizes = pd.Series(self.labels).value_counts().sort_index()
+            label_series = pd.Series(self.labels)
+            if noise_label is not None:
+                label_series = label_series[label_series != self.noise_label]
+            cluster_sizes = label_series.value_counts().sort_index()
+            total_for_ratio = int(cluster_sizes.sum()) if len(cluster_sizes) > 0 else 0
             self.cluster_summary = pd.DataFrame({
                 "cluster_id": cluster_sizes.index,
                 "cluster_size": cluster_sizes.values,
-                "ratio": cluster_sizes.values / len(self.labels),
+                "ratio": (cluster_sizes.values / total_for_ratio) if total_for_ratio > 0 else 0.0,
                 "keywords": [", ".join(self.cluster_keywords.get(c, [])) for c in cluster_sizes.index]
             }).sort_values("ratio", ascending=False)
 
@@ -716,9 +853,14 @@ class App(ttk.Frame):
                     self._busy(False, "聚类完成")
                 except Exception:
                     pass
+                method = self._get_clustering_method()
+                if method in ("KMeans", "Agglomerative"):
+                    title_line = f"已使用 K={self.k_used} 重新完成聚类。"
+                else:
+                    title_line = "已使用 DBSCAN 重新完成聚类。"
                 messagebox.showinfo(
                     "完成",
-                    f"已使用 K={self.k_used} 重新完成聚类。\n\n"
+                    title_line + "\n\n"
                     "请按需点击：\n"
                     "• 导出结果\n"
                     "• 跨 ASIN 对比\n"
@@ -948,67 +1090,151 @@ class App(ttk.Frame):
         except Exception:
             pass
 
-        # ---------- Step4: scan k ----------
-        self._set_progress(0, 1, "Scanning k...")
-        self.k_scan = scan_k(
-            self.emb,
-            self.cfg.k_min,
-            self.cfg.k_max,
-            random_state=self.cfg.random_state
-        )
-        self._log(f"K scan done. range=[{self.cfg.k_min},{self.cfg.k_max}]")
+        # ---------- Step4: scan / prepare ----------
+        method = self._get_clustering_method()
+        self.cluster_method = method
+        self._log(f"Clustering method: {method}")
 
-        rec = recommend_k(
+        if method == "KMeans":
+            self._set_progress(0, 1, "Scanning k...")
+            self.k_scan = scan_k(
+                self.emb,
+                self.cfg.k_min,
+                self.cfg.k_max,
+                random_state=self.cfg.random_state
+            )
+            self._log(f"K scan done. range=[{self.cfg.k_min},{self.cfg.k_max}]")
+
+            rec = recommend_k(
                 self.k_scan.k_to_inertia,
                 self.k_scan.k_to_silhouette,
                 weight=getattr(self.cfg, "k_score_weight", 0.7),
                 penalty_threshold=getattr(self.cfg, "k_penalty_threshold", 12),
                 penalty_strength=getattr(self.cfg, "k_penalty_strength", 0.02)
             )
-        self.k_best = int(rec.best_k)
-        score = self.k_scan.k_to_silhouette.get(rec.best_k, float("nan"))
-        self._log(f"Recommended K by {rec.method} = {self.k_best} (score={rec.score})")
+            self.k_best = int(rec.best_k)
+            self._log(f"Recommended K by {rec.method} = {self.k_best} (score={rec.score})")
 
-        # 你原来会渲染 K 扫描结果（注意：此函数内部必须线程安全）
-        try:
-            self._render_k_scan()
-        except Exception as e:
-            self._log("⚠️ _render_k_scan failed (ignored).")
-            self._log_exception(e)
+            try:
+                self._render_k_scan()
+            except Exception as e:
+                self._log("⚠️ _render_k_scan failed (ignored).")
+                self._log_exception(e)
 
-        # ---------- 自动应用推荐K（如果勾选） ----------
-        # ✅ 这里不能 self.k_var.set，必须回主线程
-        if auto_apply_flag:
-            self._ui(lambda: self.k_var.set(self.k_best))
+            if auto_apply_flag:
+                self._ui(lambda: self.k_var.set(self.k_best))
+                k_for_cluster = self.k_best
+            else:
+                k_for_cluster = int(k_used_ui) if k_used_ui is not None else self.k_best
 
-            # 如果自动应用推荐K，我们也同步把 k_used_ui 改成 k_best（用于本次聚类）
-            k_for_cluster = self.k_best
+            self.k_used = int(k_for_cluster)
+            self._log(f"Clustering K used = {self.k_used}")
+
+        elif method == "Agglomerative":
+            self._set_progress(0, 1, "Scanning k (Agglomerative)...")
+            params = self._get_clustering_params()
+            sample_size = int(getattr(self.cfg, "metrics_sample_size", 2000))
+            self.k_scan = scan_k_agglomerative(
+                self.emb,
+                self.cfg.k_min,
+                self.cfg.k_max,
+                linkage=params.get("linkage", "ward"),
+                metric=params.get("metric", "euclidean"),
+                sample_size=sample_size,
+                random_state=self.cfg.random_state
+            )
+            self._log(f"Agglomerative K scan done. range=[{self.cfg.k_min},{self.cfg.k_max}]")
+
+            rec = recommend_k(
+                {},
+                self.k_scan.k_to_silhouette,
+                weight=1.0,
+                penalty_threshold=None,
+                penalty_strength=0.0
+            )
+            self.k_best = int(rec.best_k)
+            self._log(f"Recommended K by {rec.method} = {self.k_best}")
+
+            try:
+                self._render_k_scan()
+            except Exception as e:
+                self._log("⚠️ _render_k_scan failed (ignored).")
+                self._log_exception(e)
+
+            if auto_apply_flag:
+                self._ui(lambda: self.k_var.set(self.k_best))
+                k_for_cluster = self.k_best
+            else:
+                k_for_cluster = int(k_used_ui) if k_used_ui is not None else self.k_best
+
+            self.k_used = int(k_for_cluster)
+            self._log(f"Agglomerative K used = {self.k_used}")
+
+        elif method == "DBSCAN":
+            self.k_scan = None
+            self.k_best = None
+            self._log("DBSCAN: no K scan.")
+            try:
+                self._render_k_scan()
+            except Exception:
+                pass
+
         else:
-            # 不自动应用：用用户点击按钮那一刻的 K（主线程读出来的）
-            k_for_cluster = int(k_used_ui) if k_used_ui is not None else self.k_best
+            raise ValueError(f"Unsupported clustering method: {method}")
 
-        self.k_used = int(k_for_cluster)
-        self._log(f"Clustering K used = {self.k_used}")
+        # ---------- Step4/5: run clustering ----------
+        if method in ("KMeans", "Agglomerative"):
+            self._set_progress(0, 1, f"Clustering with K={self.k_used}...")
+        else:
+            self._set_progress(0, 1, "Clustering with DBSCAN...")
 
-        # ---------- Step4/5: fit kmeans + keywords + representatives ----------
-        # 这里不再调用你原来的 _pipeline_cluster_only（它大概率内部也在 get/set Tk 变量）
-        self._set_progress(0, 1, f"Clustering with K={self.k_used}...")
+        params = self._get_clustering_params()
+        if method in ("KMeans", "Agglomerative"):
+            params["n_clusters"] = int(self.k_used)
 
-        self.labels, self.centers = fit_kmeans(
+        self.labels, self.cluster_meta = run_clustering(
             self.emb,
-            k=self.k_used,
+            method=method,
+            params=params,
             random_state=self.cfg.random_state
         )
+        self.centers = self.cluster_meta.get("centers")
 
-        # 写回 cluster_id（后续导出/对比/报告都依赖）
+        # Metrics (noise excluded)
+        metric_name = params.get("metric", "euclidean")
+        sample_size = int(getattr(self.cfg, "metrics_sample_size", 2000))
+        self.cluster_metrics = compute_cluster_metrics(
+            self.emb,
+            self.labels,
+            noise_label=self.noise_label,
+            sample_size=sample_size,
+            random_state=self.cfg.random_state,
+            metric=metric_name
+        )
+        if self.cluster_meta:
+            self._log(f"Noise ratio: {self.cluster_meta.get('noise_ratio')}")
+        if self.cluster_metrics:
+            self._log(
+                "Metrics: "
+                f"silhouette={self.cluster_metrics.get('silhouette')} | "
+                f"CH={self.cluster_metrics.get('calinski_harabasz')} | "
+                f"DB={self.cluster_metrics.get('davies_bouldin')}"
+            )
+
+        # Write back cluster_id (downstream depends on it)
         self.df_work["cluster_id"] = self.labels
+
+        # ---------- Step5: keywords + representatives ----------
+        noise_handling = getattr(self.cfg, "dbscan_noise_handling", "exclude")
+        noise_label = self.noise_label if (method == "DBSCAN" and noise_handling == "exclude") else None
 
         self._set_progress(0, 1, "Extracting keywords...")
         self.cluster_keywords = top_keywords_by_cluster(
             self.df_work["_text"].tolist(),
             self.labels,
             top_n=self.cfg.top_keywords,
-            language=self.cfg.text_language
+            language=self.cfg.text_language,
+            noise_label=noise_label
         )
 
         self._set_progress(0, 1, "Selecting representatives...")
@@ -1016,7 +1242,8 @@ class App(ttk.Frame):
             self.emb,
             self.labels,
             self.centers,
-            top_n=self.cfg.top_representatives
+            top_n=self.cfg.top_representatives,
+            noise_label=noise_label
         )
 
         # ★关键：报告/导出依赖这个
@@ -1033,11 +1260,15 @@ class App(ttk.Frame):
         self.reps_df = pd.DataFrame(rows)
 
         # cluster_summary（导出/报告用）
-        cluster_sizes = pd.Series(self.labels).value_counts().sort_index()
+        label_series = pd.Series(self.labels)
+        if noise_label is not None:
+            label_series = label_series[label_series != self.noise_label]
+        cluster_sizes = label_series.value_counts().sort_index()
+        total_for_ratio = int(cluster_sizes.sum()) if len(cluster_sizes) > 0 else 0
         self.cluster_summary = pd.DataFrame({
             "cluster_id": cluster_sizes.index,
             "cluster_size": cluster_sizes.values,
-            "ratio": cluster_sizes.values / len(self.labels),
+            "ratio": (cluster_sizes.values / total_for_ratio) if total_for_ratio > 0 else 0.0,
             "keywords": [", ".join(self.cluster_keywords.get(int(c), [])) for c in cluster_sizes.index]
         }).sort_values("ratio", ascending=False)
 
@@ -1133,11 +1364,34 @@ class App(ttk.Frame):
 
     def _render_k_scan(self):
         self.k_text.delete("1.0", "end")
-        self.k_text.insert("end", "k\tinertia(SSE)\tsilhouette\n")
+        if self.k_scan is None:
+            self.k_text.insert("end", "No K scan for current method (e.g., DBSCAN).\n")
+            return
+
+        has_inertia = bool(self.k_scan.k_to_inertia)
+        has_ch = bool(getattr(self.k_scan, "k_to_ch", None))
+
+        if has_inertia:
+            self.k_text.insert("end", "k\tinertia(SSE)\tsilhouette\n")
+        else:
+            header = "k\tsilhouette"
+            if has_ch:
+                header += "\tCH"
+            self.k_text.insert("end", header + "\n")
+
         for k in range(self.cfg.k_min, self.cfg.k_max + 1):
-            sse = self.k_scan.k_to_inertia.get(k, None)
             sil = self.k_scan.k_to_silhouette.get(k, None)
-            self.k_text.insert("end", f"{k}\t{(sse or 0):.2f}\t\t{(sil or 0):.4f}\n")
+            if has_inertia:
+                sse = self.k_scan.k_to_inertia.get(k, None)
+                self.k_text.insert("end", f"{k}\t{(sse or 0):.2f}\t\t{(sil or 0):.4f}\n")
+            else:
+                ch = None
+                if has_ch:
+                    ch = (self.k_scan.k_to_ch or {}).get(k, None)
+                line = f"{k}\t{(sil or 0):.4f}"
+                if has_ch:
+                    line += f"\t{(ch or 0):.4f}"
+                self.k_text.insert("end", line + "\n")
 
     def _render_results(self, stability: dict):
         self.res_text.delete("1.0", "end")
@@ -1167,48 +1421,87 @@ class App(ttk.Frame):
             self.res_text.insert("end", "\n")
 
     def on_plot_k(self):
+        method = self._get_clustering_method()
         if self.k_scan is None:
-            messagebox.showwarning("Warning", "Please run the full pipeline (at least through K scan).")
+            messagebox.showwarning("Warning", "No K scan for current method (e.g., DBSCAN).")
             return
 
         def job():
             self._set_progress(0, 1, "Generating K selection plot...")
 
-            rec = recommend_k(
-                self.k_scan.k_to_inertia,
-                self.k_scan.k_to_silhouette,
-                weight=getattr(self.cfg, "k_score_weight", 0.7),
-                penalty_threshold=getattr(self.cfg, "k_penalty_threshold", 12),
-                penalty_strength=getattr(self.cfg, "k_penalty_strength", 0.02)
-            )
-            best_k = int(rec.best_k)
+            if method == "Agglomerative":
+                rec = recommend_k(
+                    {},
+                    self.k_scan.k_to_silhouette,
+                    weight=1.0,
+                    penalty_threshold=None,
+                    penalty_strength=0.0
+                )
+                best_k = int(rec.best_k)
 
-            labels = {
-                "x_label": "K",
-                "y1_label": "WCSS / Inertia",
-                "y2_label": "Silhouette Score",
-                "line1_label": "WCSS/Inertia (Elbow) - solid (blue)",
-                "line2_label": "Silhouette Score - dashed (orange)",
-                "title": "Optimal K Selection (Elbow & Silhouette)",
-                "title_with_k": f"Optimal K Selection (Recommended K={best_k})",
-                "vline_label": f"Recommended K = {best_k} - vertical (green)",
-            }
+                labels = {
+                    "x_label": "K",
+                    "y1_label": "Silhouette Score",
+                    "y2_label": "Calinski-Harabasz Score",
+                    "line1_label": "Silhouette Score - solid (blue)",
+                    "line2_label": "CH Score - dashed (orange)",
+                    "title": "K Selection (Silhouette/CH)",
+                    "title_with_k": f"K Selection (Recommended K={best_k})",
+                    "vline_label": f"Recommended K = {best_k} - vertical (green)",
+                }
 
-            out_lang = self._get_output_language()
-            if out_lang in {"zh", "en"}:
-                keys = list(labels.keys())
-                vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
-                labels = dict(zip(keys, vals))
+                out_lang = self._get_output_language()
+                if out_lang in {"zh", "en"}:
+                    keys = list(labels.keys())
+                    vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
+                    labels = dict(zip(keys, vals))
 
-            png_path = os.path.join(self.output_dir, "k_selection.png")
-            plot_k_curves(
-                self.k_scan.k_to_inertia,
-                self.k_scan.k_to_silhouette,
-                recommended_k=best_k,
-                save_path=png_path,
-                lang=self.cfg.text_language,
-                labels=labels
-            )
+                png_path = os.path.join(self.output_dir, "k_selection.png")
+                plot_silhouette_ch_curves(
+                    self.k_scan.k_to_silhouette,
+                    k_to_ch=getattr(self.k_scan, "k_to_ch", None),
+                    recommended_k=best_k,
+                    save_path=png_path,
+                    lang=self.cfg.text_language,
+                    labels=labels
+                )
+
+            else:
+                rec = recommend_k(
+                    self.k_scan.k_to_inertia,
+                    self.k_scan.k_to_silhouette,
+                    weight=getattr(self.cfg, "k_score_weight", 0.7),
+                    penalty_threshold=getattr(self.cfg, "k_penalty_threshold", 12),
+                    penalty_strength=getattr(self.cfg, "k_penalty_strength", 0.02)
+                )
+                best_k = int(rec.best_k)
+
+                labels = {
+                    "x_label": "K",
+                    "y1_label": "WCSS / Inertia",
+                    "y2_label": "Silhouette Score",
+                    "line1_label": "WCSS/Inertia (Elbow) - solid (blue)",
+                    "line2_label": "Silhouette Score - dashed (orange)",
+                    "title": "Optimal K Selection (Elbow & Silhouette)",
+                    "title_with_k": f"Optimal K Selection (Recommended K={best_k})",
+                    "vline_label": f"Recommended K = {best_k} - vertical (green)",
+                }
+
+                out_lang = self._get_output_language()
+                if out_lang in {"zh", "en"}:
+                    keys = list(labels.keys())
+                    vals = self._translate_texts_to(list(labels.values()), src_lang="en", tgt_lang=out_lang)
+                    labels = dict(zip(keys, vals))
+
+                png_path = os.path.join(self.output_dir, "k_selection.png")
+                plot_k_curves(
+                    self.k_scan.k_to_inertia,
+                    self.k_scan.k_to_silhouette,
+                    recommended_k=best_k,
+                    save_path=png_path,
+                    lang=self.cfg.text_language,
+                    labels=labels
+                )
 
             def done():
                 if self.auto_apply_k.get():
@@ -1224,11 +1517,14 @@ class App(ttk.Frame):
                     cur_k = best_k
 
                 self._set_progress(1, 1, "K selection plot ready.")
+                note = "If you want to update clustering, re-run Step4-5 with current K."
+                if method == "Agglomerative":
+                    note = "Legend: solid=Silhouette, dashed=CH. " + note
                 messagebox.showinfo(
                     "Done",
                     f"K plot exported:\n{png_path}\n\n"
                     f"Recommended K={best_k}\nCurrent K={cur_k}\n\n"
-                    "If you want to update clustering, re-run Step4-5 with current K."
+                    + note
                 )
 
             self._ui(done)
@@ -1257,6 +1553,16 @@ class App(ttk.Frame):
 
             try:
                 df_clustered = self.df_work.copy()
+                method = self._get_clustering_method()
+                noise_handling = getattr(self.cfg, "dbscan_noise_handling", "exclude")
+                if method == "DBSCAN" and noise_handling == "exclude":
+                    df_clustered = df_clustered[df_clustered["cluster_id"] != self.noise_label].copy()
+                    if len(df_clustered) == 0:
+                        self._ui(lambda: messagebox.showwarning(
+                            "Warning",
+                            "All points are noise under current DBSCAN settings. No ASIN comparison available."
+                        ))
+                        return
 
                 asin_col = None
                 try:
@@ -1440,6 +1746,17 @@ class App(ttk.Frame):
             self._set_progress(0, 1, "Generating priority outputs...")
             df = self.df_work.copy()
 
+            method = self._get_clustering_method()
+            noise_handling = getattr(self.cfg, "dbscan_noise_handling", "exclude")
+            if method == "DBSCAN" and noise_handling == "exclude":
+                df = df[df["cluster_id"] != self.noise_label].copy()
+                if len(df) == 0:
+                    self._ui(lambda: messagebox.showwarning(
+                        "Warning",
+                        "All points are noise under current DBSCAN settings. No priority outputs available."
+                    ))
+                    return
+
             group_col = None
             for cand in ["ASIN", "asin", "", "place", "group"]:
                 if cand in df.columns:
@@ -1531,10 +1848,15 @@ class App(ttk.Frame):
                 id_col = "_id" if "_id" in self.df_work.columns else None
 
             rows = []
-            total = len(self.df_work)
+            method = self._get_clustering_method()
+            noise_handling = getattr(self.cfg, "dbscan_noise_handling", "exclude")
+            if method == "DBSCAN" and noise_handling == "exclude":
+                total = int((self.df_work["cluster_id"] != self.noise_label).sum())
+            else:
+                total = len(self.df_work)
             for c in sorted(self.cluster_keywords.keys()):
                 idx = (self.df_work["cluster_id"] == c)
-                ratio = float(idx.mean()) if total > 0 else 0.0
+                ratio = float(idx.sum()) / float(total) if total > 0 else 0.0
                 rows.append({
                     "cluster_id": int(c),
                     "cluster_size": int(idx.sum()),
@@ -1591,8 +1913,12 @@ class App(ttk.Frame):
         self._run_in_thread(job, "Exporting results...")
 
     def on_report_offline(self):
-        if self.df_work is None or self.cluster_keywords is None or self.cluster_reps is None or self.k_scan is None:
+        if self.df_work is None or self.cluster_keywords is None or self.cluster_reps is None:
             messagebox.showwarning("提示", "请先运行 Step1-5 并得到聚类结果后再生成报告")
+            return
+        method = self._get_clustering_method()
+        if method in ("KMeans", "Agglomerative") and self.k_scan is None:
+            messagebox.showwarning("提示", "请先运行 Step1-5 并得到 K 扫描结果后再生成报告")
             return
         if "cluster_id" not in self.df_work.columns:
             messagebox.showwarning("提示", "当前 df_work 缺少 cluster_id，请先重跑 Step4-5")
@@ -1616,10 +1942,15 @@ class App(ttk.Frame):
 
             # summary
             rows = []
-            total = len(self.df_work)
+            method = self._get_clustering_method()
+            noise_handling = getattr(self.cfg, "dbscan_noise_handling", "exclude")
+            if method == "DBSCAN" and noise_handling == "exclude":
+                total = int((self.df_work["cluster_id"] != self.noise_label).sum())
+            else:
+                total = len(self.df_work)
             for c in sorted(self.cluster_keywords.keys()):
                 idx = (self.df_work["cluster_id"] == c)
-                ratio = float(idx.mean()) if total > 0 else 0.0
+                ratio = float(idx.sum()) / float(total) if total > 0 else 0.0
                 rows.append({
                     "cluster_id": int(c),
                     "cluster_size": int(idx.sum()),
@@ -1673,46 +2004,77 @@ class App(ttk.Frame):
             attr_share_png = os.path.join(self.output_dir, "asin_attribute_share.png")
             attr_pain_png  = os.path.join(self.output_dir, "asin_attribute_pain.png")
 
-            rec = recommend_k(
-                self.k_scan.k_to_inertia,
-                self.k_scan.k_to_silhouette,
-                weight=getattr(self.cfg, "k_score_weight", 0.7),
-                penalty_threshold=getattr(self.cfg, "k_penalty_threshold", 12),
-                penalty_strength=getattr(self.cfg, "k_penalty_strength", 0.02)
-            )
-            w = getattr(self.cfg, "k_score_weight", 0.7)
-            th = getattr(self.cfg, "k_penalty_threshold", 12)
-            ps = getattr(self.cfg, "k_penalty_strength", 0.02)
-            k_note_en = (
-                "K selection uses a composite score: "
-                "score = w*silhouette_norm + (1-w)*elbow_norm - penalty. "
-                f"penalty = max(0, k - {th})*{ps}. "
-                f"Params: w={w:.2f}, threshold={th}, strength={ps:.3f}. "
-                f"Recommended K={int(rec.best_k)}."
-            )
-            k_note_zh = (
-                "K"
-                "score = w*silhouette_norm + (1-w)*elbow_norm - penalty"
-                f"penalty = max(0, k - {th})*{ps}"
-                f"w={w:.2f}={th}={ps:.3f}"
-                f"K={int(rec.best_k)}"
-            )
-            out_lang = self._get_output_language()
-            if out_lang == "zh":
-                k_method_note = k_note_en
-            elif out_lang == "en":
-                k_method_note = k_note_zh
-            else:
-                k_method_note = k_note_zh if self._lang_bucket(self.cfg.text_language) == "zh" else k_note_en
+            method = self._get_clustering_method()
+            k_to_inertia = {}
+            k_to_sil = {}
+            k_to_ch = None
+            k_best = None
+            k_method_note = None
+
+            if method == "KMeans":
+                rec = recommend_k(
+                    self.k_scan.k_to_inertia,
+                    self.k_scan.k_to_silhouette,
+                    weight=getattr(self.cfg, "k_score_weight", 0.7),
+                    penalty_threshold=getattr(self.cfg, "k_penalty_threshold", 12),
+                    penalty_strength=getattr(self.cfg, "k_penalty_strength", 0.02)
+                )
+                k_to_inertia = self.k_scan.k_to_inertia
+                k_to_sil = self.k_scan.k_to_silhouette
+                k_best = int(rec.best_k)
+
+                w = getattr(self.cfg, "k_score_weight", 0.7)
+                th = getattr(self.cfg, "k_penalty_threshold", 12)
+                ps = getattr(self.cfg, "k_penalty_strength", 0.02)
+                k_note_en = (
+                    "K selection uses a composite score: "
+                    "score = w*silhouette_norm + (1-w)*elbow_norm - penalty. "
+                    f"penalty = max(0, k - {th})*{ps}. "
+                    f"Params: w={w:.2f}, threshold={th}, strength={ps:.3f}. "
+                    f"Recommended K={int(rec.best_k)}."
+                )
+                k_note_zh = (
+                    "K"
+                    "score = w*silhouette_norm + (1-w)*elbow_norm - penalty"
+                    f"penalty = max(0, k - {th})*{ps}"
+                    f"w={w:.2f}={th}={ps:.3f}"
+                    f"K={int(rec.best_k)}"
+                )
+                out_lang = self._get_output_language()
+                if out_lang == "zh":
+                    k_method_note = k_note_en
+                elif out_lang == "en":
+                    k_method_note = k_note_zh
+                else:
+                    k_method_note = k_note_zh if self._lang_bucket(self.cfg.text_language) == "zh" else k_note_en
+
+            elif method == "Agglomerative":
+                k_to_sil = self.k_scan.k_to_silhouette if self.k_scan else {}
+                k_to_ch = getattr(self.k_scan, "k_to_ch", None)
+                rec = recommend_k({}, k_to_sil, weight=1.0, penalty_threshold=None, penalty_strength=0.0)
+                k_best = int(rec.best_k)
+                k_method_note = (
+                    "Agglomerative K selection uses silhouette (and CH if available). "
+                    "Plot legend: solid line = silhouette, dashed line = CH."
+                )
+
+            elif method == "DBSCAN":
+                k_method_note = "K scan is not applicable for DBSCAN."
+
+            comparison_df = self._build_method_comparison_table()
+
+            if method == "DBSCAN":
+                k_png = None
 
             out_path = build_offline_report(
                 cfg=self.cfg,
                 output_dir=self.output_dir,
                 df_all=self.df,          # 原始全量
                 df_work=self.df_work,    # 用于聚类的那份
-                k_to_inertia=self.k_scan.k_to_inertia,
-                k_to_silhouette=self.k_scan.k_to_silhouette,
-                k_best=int(rec.best_k),
+                k_to_inertia=k_to_inertia,
+                k_to_silhouette=k_to_sil,
+                k_to_ch=k_to_ch,
+                k_best=k_best,
                 cluster_summary=summary,
                 reps_df=reps_df,
 
@@ -1727,6 +2089,12 @@ class App(ttk.Frame):
                 asin_attr_pain_png=attr_pain_png if os.path.exists(attr_pain_png) else None,
                 
                 key_findings_with_metrics=True,   # ✅ 论文版：带数值
+                k_method_note=k_method_note,
+                clustering_method=method,
+                clustering_params=(self.cluster_meta or {}).get("method_params", {}),
+                clustering_metrics=self.cluster_metrics,
+                clustering_meta=self.cluster_meta,
+                method_comparison_df=comparison_df,
                 translate_fn=report_translate
             )
 
@@ -1926,6 +2294,266 @@ class App(ttk.Frame):
             f"负面筛选策略已切换为：\n{self.cfg.negative_mode}\n\n"
             "该设置将用于下一次 Step1–5 运行。"
         )
+
+    def on_clustering_method_changed(self, event=None):
+        method = (self.cluster_method_var.get() or "KMeans").strip()
+        self.cfg.clustering_method = method
+        save_user_settings({"clustering_method": method})
+        self._update_clustering_param_visibility()
+        self._log(f"✅ clustering_method set to: {method}")
+        messagebox.showinfo("已保存", f"聚类算法已切换为：\n{method}\n\n该设置将用于下一次 Step4–5 运行。")
+
+    def on_clustering_params_changed(self, event=None):
+        try:
+            eps = float(self.dbscan_eps_var.get())
+            min_samples = int(self.dbscan_min_samples_var.get())
+            include_noise = bool(self.dbscan_include_noise_var.get())
+            linkage = (self.agg_linkage_var.get() or "ward").strip()
+            metric = (self.agg_metric_var.get() or "euclidean").strip()
+            sample_size = int(self.metrics_sample_size_var.get())
+
+            # Ward only supports euclidean
+            if linkage == "ward" and metric != "euclidean":
+                metric = "euclidean"
+                try:
+                    self.agg_metric_var.set(metric)
+                except Exception:
+                    pass
+
+            self.cfg.dbscan_eps = eps
+            self.cfg.dbscan_min_samples = min_samples
+            self.cfg.dbscan_noise_handling = "keep" if include_noise else "exclude"
+            self.cfg.agg_linkage = linkage
+            self.cfg.agg_metric = metric
+            self.cfg.metrics_sample_size = sample_size
+
+            save_user_settings({
+                "dbscan_eps": eps,
+                "dbscan_min_samples": min_samples,
+                "dbscan_noise_handling": self.cfg.dbscan_noise_handling,
+                "agg_linkage": linkage,
+                "agg_metric": metric,
+                "metrics_sample_size": sample_size,
+            })
+
+            self._update_clustering_param_visibility()
+
+            self._log(
+                f"✅ Clustering params saved: DBSCAN(eps={eps}, min_samples={min_samples}) | "
+                f"noise_handling={self.cfg.dbscan_noise_handling} | "
+                f"Agg(linkage={linkage}, metric={metric}) | metrics_sample={sample_size}"
+            )
+        except Exception as e:
+            self._log(f"❌ 保存聚类参数失败: {e}")
+
+    def _update_clustering_param_visibility(self):
+        method = (self.cluster_method_var.get() or "KMeans").strip()
+        is_dbscan = method == "DBSCAN"
+        is_agg = method == "Agglomerative"
+
+        db_state = "normal" if is_dbscan else "disabled"
+        agg_state = "normal" if is_agg else "disabled"
+
+        for w in [self.dbscan_eps_spin, self.dbscan_min_samples_spin]:
+            try:
+                w.config(state=db_state)
+            except Exception:
+                pass
+
+        try:
+            self.dbscan_noise_cb.config(state=db_state)
+        except Exception:
+            pass
+
+        for w in [self.agg_linkage_box, self.agg_metric_box]:
+            try:
+                w.config(state=agg_state)
+            except Exception:
+                pass
+
+        # Ward linkage forces euclidean
+        if is_agg and (self.agg_linkage_var.get() or "").strip() == "ward":
+            try:
+                self.agg_metric_var.set("euclidean")
+                self.agg_metric_box.config(state="disabled")
+            except Exception:
+                pass
+
+    def _get_clustering_method(self) -> str:
+        return (self.cluster_method_var.get() or getattr(self.cfg, "clustering_method", "KMeans")).strip()
+
+    def _get_clustering_params(self) -> dict:
+        method = self._get_clustering_method()
+        params = {
+            "noise_label": self.noise_label,
+        }
+        if method == "KMeans":
+            params.update({
+                "n_clusters": int(self.k_var.get()),
+                "init": getattr(self.cfg, "kmeans_init", "k-means++"),
+                "n_init": getattr(self.cfg, "kmeans_n_init", "auto"),
+                "max_iter": getattr(self.cfg, "kmeans_max_iter", 500),
+                "tol": getattr(self.cfg, "kmeans_tol", 1e-4),
+            })
+        elif method == "Agglomerative":
+            linkage = (self.agg_linkage_var.get() or "ward").strip()
+            metric = (self.agg_metric_var.get() or "euclidean").strip()
+            if linkage == "ward":
+                metric = "euclidean"
+            params.update({
+                "n_clusters": int(self.k_var.get()),
+                "linkage": linkage,
+                "metric": metric,
+            })
+        elif method == "DBSCAN":
+            params.update({
+                "eps": float(self.dbscan_eps_var.get()),
+                "min_samples": int(self.dbscan_min_samples_var.get()),
+                "metric": getattr(self.cfg, "dbscan_metric", "euclidean"),
+            })
+        return params
+
+    def _get_clustering_params_for_method(self, method: str) -> dict:
+        method = (method or "KMeans").strip()
+        params = {
+            "noise_label": self.noise_label,
+        }
+        if method == "KMeans":
+            k_use = self.k_best if (self.cluster_method == "KMeans" and getattr(self, "k_best", None)) else int(self.k_var.get())
+            params.update({
+                "n_clusters": int(k_use),
+                "init": getattr(self.cfg, "kmeans_init", "k-means++"),
+                "n_init": getattr(self.cfg, "kmeans_n_init", "auto"),
+                "max_iter": getattr(self.cfg, "kmeans_max_iter", 500),
+                "tol": getattr(self.cfg, "kmeans_tol", 1e-4),
+            })
+        elif method == "Agglomerative":
+            k_use = self.k_best if (self.cluster_method == "Agglomerative" and getattr(self, "k_best", None)) else int(self.k_var.get())
+            linkage = (self.agg_linkage_var.get() or "ward").strip()
+            metric = (self.agg_metric_var.get() or "euclidean").strip()
+            if linkage == "ward":
+                metric = "euclidean"
+            params.update({
+                "n_clusters": int(k_use),
+                "linkage": linkage,
+                "metric": metric,
+            })
+        elif method == "DBSCAN":
+            params.update({
+                "eps": float(self.dbscan_eps_var.get()),
+                "min_samples": int(self.dbscan_min_samples_var.get()),
+                "metric": getattr(self.cfg, "dbscan_metric", "euclidean"),
+            })
+        return params
+
+    def _build_method_comparison_table(self):
+        if self.emb is None:
+            return None
+
+        out_lang = self._get_output_language()
+        if out_lang in {"zh", "en"}:
+            lang = out_lang
+        else:
+            lang = "zh" if self._lang_bucket(getattr(self.cfg, "text_language", "en")) == "zh" else "en"
+
+        if lang == "zh":
+            col_map = {
+                "method": "聚类方法",
+                "clusters": "聚类数",
+                "silhouette": "轮廓系数",
+                "ch": "Calinski-Hara",
+                "interpret": "聚类结果可解释性",
+            }
+            method_name_map = {
+                "KMeans": "k-means",
+                "DBSCAN": "DBSCAN",
+                "Agglomerative": "层次聚类",
+            }
+        else:
+            col_map = {
+                "method": "Clustering Method",
+                "clusters": "#Clusters",
+                "silhouette": "Silhouette",
+                "ch": "Calinski-Harabasz",
+                "interpret": "Interpretability",
+            }
+            method_name_map = {
+                "KMeans": "KMeans",
+                "DBSCAN": "DBSCAN",
+                "Agglomerative": "Agglomerative",
+            }
+
+        methods = [self._get_clustering_method()]
+        rows = []
+        sample_size = int(getattr(self.cfg, "metrics_sample_size", 2000))
+
+        for method in methods:
+            try:
+                params = self._get_clustering_params_for_method(method)
+                labels, meta = run_clustering(
+                    self.emb,
+                    method=method,
+                    params=params,
+                    random_state=self.cfg.random_state
+                )
+                metric_name = params.get("metric", "euclidean")
+                metrics = compute_cluster_metrics(
+                    self.emb,
+                    labels,
+                    noise_label=self.noise_label,
+                    sample_size=sample_size,
+                    random_state=self.cfg.random_state,
+                    metric=metric_name
+                )
+                interpret = self._interpretability_text(metrics, meta, lang=lang)
+                rows.append({
+                    col_map["method"]: method_name_map.get(method, method),
+                    col_map["clusters"]: meta.get("n_clusters"),
+                    col_map["silhouette"]: metrics.get("silhouette"),
+                    col_map["ch"]: metrics.get("calinski_harabasz"),
+                    col_map["interpret"]: interpret,
+                })
+            except Exception as e:
+                interpret = self._interpretability_text({"note": f"failed: {e}"}, {}, lang=lang)
+                rows.append({
+                    col_map["method"]: method_name_map.get(method, method),
+                    col_map["clusters"]: None,
+                    col_map["silhouette"]: None,
+                    col_map["ch"]: None,
+                    col_map["interpret"]: interpret,
+                })
+
+        return pd.DataFrame(rows)
+
+    def _interpretability_text(self, metrics: dict | None, meta: dict | None, lang: str = "en") -> str:
+        metrics = metrics or {}
+        meta = meta or {}
+        sil = metrics.get("silhouette")
+        ch = metrics.get("calinski_harabasz")
+        noise_ratio = meta.get("noise_ratio", 0.0)
+
+        if sil is None:
+            return "低：簇数不足" if lang == "zh" else "Low: insufficient clusters"
+
+        note = metrics.get("note")
+        if note:
+            return f"低：{note}" if lang == "zh" else f"Low: {note}"
+
+        score = float(sil)
+        label = "低" if lang == "zh" else "Low"
+        if score >= 0.5:
+            label = "高" if lang == "zh" else "High"
+        elif score >= 0.25:
+            label = "中" if lang == "zh" else "Medium"
+
+        note_parts = []
+        if noise_ratio is not None and noise_ratio > 0.3:
+            note_parts.append("噪声较多" if lang == "zh" else "high noise")
+        if ch is None:
+            note_parts.append("CH不可用" if lang == "zh" else "CH n/a")
+
+        note = "; ".join(note_parts)
+        return f"{label}: {note}" if note else f"{label}"
 
     def on_thresholds_changed(self, event=None):
         """

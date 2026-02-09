@@ -57,7 +57,8 @@ def top_keywords_by_cluster(
     texts: List[str],
     labels: np.ndarray,
     top_n: int = 12,
-    language: str = "en"
+    language: str = "en",
+    noise_label: int | None = None
 ) -> Dict[int, List[str]]:
     """
     为每个 cluster 提取 Top-N TF-IDF 关键词
@@ -87,6 +88,8 @@ def top_keywords_by_cluster(
     texts = [_safe_text(t) for t in texts]
     if not any(t.strip() for t in texts):
         for c in sorted(set(labels.tolist())):
+            if noise_label is not None and int(c) == int(noise_label):
+                continue
             out[c] = []
         return out
 
@@ -108,6 +111,8 @@ def top_keywords_by_cluster(
     features = np.array(vectorizer.get_feature_names_out())
 
     for c in sorted(set(labels.tolist())):
+        if noise_label is not None and int(c) == int(noise_label):
+            continue
         idx = np.where(labels == c)[0]
         if len(idx) == 0:
             out[c] = []

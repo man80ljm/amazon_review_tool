@@ -155,3 +155,85 @@ def plot_k_curves(
     if save_path:
         fig.savefig(save_path, dpi=300)
     return fig
+
+
+def plot_silhouette_ch_curves(
+    k_to_silhouette: Dict[int, float],
+    k_to_ch: Optional[Dict[int, float]] = None,
+    recommended_k: int | None = None,
+    save_path: str | None = None,
+    lang: str | None = None,
+    labels: Dict[str, str] | None = None
+):
+    """
+    Plot silhouette (and optional CH) over K for methods without inertia.
+    """
+    ks = sorted(k_to_silhouette.keys())
+    sil = [k_to_silhouette.get(k, np.nan) for k in ks]
+    ch = [k_to_ch.get(k, np.nan) for k in ks] if k_to_ch else None
+
+    labels = labels or {}
+    x_label = labels.get("x_label", "K")
+    y1_label = labels.get("y1_label", "Silhouette Score")
+    y2_label = labels.get("y2_label", "Calinski-Harabasz Score")
+    line1_label = labels.get("line1_label", "Silhouette Score - solid (blue)")
+    line2_label = labels.get("line2_label", "CH Score - dashed (orange)")
+    title = labels.get("title", "K Selection (Silhouette/CH)")
+    title_with_k = labels.get("title_with_k", f"K Selection (Recommended K={recommended_k})")
+    vline_label = labels.get("vline_label", f"Recommended K = {recommended_k} - vertical (green)")
+
+    apply_matplotlib_style(lang)
+    fig, ax1 = plt.subplots(figsize=(9, 5))
+
+    line1, = ax1.plot(
+        ks, sil,
+        marker="o",
+        linestyle="-",
+        linewidth=2,
+        color="tab:blue",
+        label=line1_label
+    )
+    ax1.set_xlabel(x_label)
+    ax1.set_ylabel(y1_label)
+    ax1.grid(True, linestyle="--", alpha=0.3)
+
+    handles = [line1]
+    labels_list = [line1.get_label()]
+
+    if ch is not None:
+        ax2 = ax1.twinx()
+        line2, = ax2.plot(
+            ks, ch,
+            marker="s",
+            linestyle="--",
+            linewidth=2,
+            color="tab:orange",
+            label=line2_label
+        )
+        ax2.set_ylabel(y2_label)
+        handles.append(line2)
+        labels_list.append(line2.get_label())
+
+    vline = None
+    if recommended_k is not None:
+        vline = ax1.axvline(
+            recommended_k,
+            linestyle="--",
+            linewidth=2,
+            color="tab:green",
+            label=vline_label
+        )
+        ax1.set_title(title_with_k)
+    else:
+        ax1.set_title(title)
+
+    if vline is not None:
+        handles.append(vline)
+        labels_list.append(vline.get_label())
+
+    ax1.legend(handles, labels_list, loc="best")
+
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=300)
+    return fig

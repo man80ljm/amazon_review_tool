@@ -1,56 +1,41 @@
-# Amazon Review Analyzer
+# Amazon Review Analyzer（中文说明）
 
-**A Data-Driven Framework for User Feedback Mining and Design Attribute Analysis**  
-**用户反馈挖掘与设计属性分析工具（离线）**
-
----
-
-## 📌 Project Overview | 项目简介
-
-**Amazon Review Analyzer** 是一款基于 **情感分析 + 语义向量聚类（Embedding + KMeans）** 的离线评论分析工具，支持从大规模用户评论中自动挖掘：
-
-- 核心用户痛点（Pain Points）
-- 关键设计属性（Design Attributes）
-- 跨 ASIN 的差异与机会点（Opportunities）
-
-适用于：
-- 📄 学术研究（论文实验、方法验证）
-- 🎨 设计决策支持（产品改进、设计优化）
-- 📊 用户反馈分析（多产品对比、竞品分析）
+Amazon Review Analyzer 是一款离线评论分析工具，集成情感过滤、本地向量化与聚类分析，用于挖掘用户痛点、设计属性以及跨 ASIN 的机会点。适用于学术研究、产品改进和用户反馈分析。
 
 ---
 
-## 🧠 Methodology | 方法框架
+## 一、功能概览
 
-1) 数据导入（CSV / XLSX）  
-2) 负面筛选（Star / Sentiment / Fusion）  
-3) 文本向量化（本地模型）  
-4) K 扫描 + 聚类  
-5) 关键词与代表评论抽取  
-6) 属性聚合与跨 ASIN 分析  
-7) 优先级 / 机会点排序  
-8) 离线 Word 报告生成  
+核心能力:
+- 负面评论筛选（星级 / 情感 / 融合）
+- 本地嵌入向量化（离线模型）
+- 聚类分析（KMeans / DBSCAN / 层次聚类）
+- 聚类关键词 + 代表评论抽取
+- 跨 ASIN 属性占比与痛点分析
+- 优先级排序与机会点输出
+- 离线 Word 报告生成
 
----
-
-## 🗂 Project Structure | 项目结构
-
-```text
-amazon_review_tool/
-├─ core/                 # 核心算法模块
-├─ ui/                   # Tkinter 界面
-├─ models/               # 本地模型（不入 git）
-├─ outputs/              # 结果输出
-├─ main.py               # 程序入口
-├─ config.py             # 配置
-├─ settings.json         # 参数配置
-├─ download_models.py    # 模型下载
-└─ README.md
-```
+适用场景:
+- 学术研究与方法对比
+- 竞品对比与用户洞察
+- 产品改进与设计决策支持
 
 ---
 
-## ⚙️ Environment Setup | 环境准备（开发模式）
+## 二、整体流程
+
+1) 导入数据（CSV / XLSX）
+2) 负面筛选（星级 / 情感 / 融合）
+3) 文本向量化（本地 embedding）
+4) 聚类分析（KMeans / DBSCAN / 层次聚类）
+5) 关键词与代表评论抽取
+6) 属性聚合与跨 ASIN 分析
+7) 优先级排序与机会点
+8) 生成离线 Word 报告
+
+---
+
+## 三、环境准备
 
 ```bash
 python -m venv venv
@@ -60,15 +45,13 @@ pip install -r requirements.txt
 
 ---
 
-## 📥 Model Preparation | 模型准备（必需）
-
-全部模型**本地离线加载**，不联网运行：
+## 四、模型准备（离线）
 
 ```bash
 python download_models.py
 ```
 
-下载完成后目录：
+目录结构:
 
 ```text
 models/
@@ -79,7 +62,7 @@ models/
 
 ---
 
-## ▶️ Run | 启动
+## 五、启动程序
 
 ```bash
 python main.py
@@ -87,89 +70,193 @@ python main.py
 
 ---
 
-## 🧭 UI Parameters | 界面参数说明
+## 六、详细使用说明
 
-### 1) 负面判定模式
+### 1) 数据导入
 
-- STAR_ONLY：仅用星级阈值  
-- SENTIMENT_ONLY：仅用情感模型  
-- WEIGHTED_FUSION：星级 + 情感融合（推荐）  
+点击「导入文件（CSV/XLSX）」。
 
-### 2) Star / Sentiment / Fusion 参数
+建议字段:
+- 评论文本（必需）
+- ASIN（可选，用于跨 ASIN 对比）
+- Star（可选，用于负面筛选和痛点评分）
+- ReviewTime、ReviewId（可选）
 
-- Star <= X：星级阈值  
-- Conf >= X：情感置信阈值  
-- wStar / wSent：融合权重  
-- Keep >= X：融合分数保留阈值  
+程序会自动尝试列名映射。映射失败时可通过 settings.json 修正。
 
-建议：  
-- Star <= X 越大，保留评论越多  
-- Conf >= X 越大，过滤越严格  
-- Keep >= X 越大，负面更“强”  
-- wStar / wSent 控制谁更主导  
+### 2) 负面筛选
 
-### 3) K 值推荐控制
+负面判定模式:
+- STAR_ONLY: 仅用星级阈值
+- SENTIMENT_ONLY: 仅用情感模型
+- FUSION: 星级 + 情感融合（推荐）
 
-综合评分：
+参数解释:
+- Star <= X: 星级阈值
+- Conf >= X: 情感置信阈值
+- wStar / wSent: 融合权重
+- Keep >= X: 融合分数保留阈值
 
-```
-score = wk * norm(silhouette) + (1 - wk) * norm(elbow)
-score -= penalty * max(0, K - k_threshold)
-```
+建议:
+- Star 阈值越大，保留评论越多
+- Conf 越高，筛选越严格
+- Keep 越高，保留的“负面强度”越高
 
-- wk：轮廓系数权重（0..1）  
-- K >=（k_threshold）：惩罚起点  
-- penalty：惩罚强度  
+### 3) 聚类算法
 
-默认：wk=0.7, K>=12, penalty=0.02  
+下拉框选择:
+- KMeans
+- DBSCAN
+- 层次聚类（Agglomerative）
 
-建议：  
-- wk 大 → 更偏轮廓系数（常更小 K）  
-- wk 小 → 更偏肘部法（常更大 K）  
-- penalty 大 → 更强抑制大 K  
+#### KMeans
+- 有 K 扫描（轮廓系数 + 惯性 SSE）
+- 推荐 K 由加权评分给出
+
+#### 层次聚类
+- 有 K 扫描（轮廓系数 + CH）
+- 推荐 K 主要由轮廓系数决定
+- K 图图例: 实线 = 轮廓系数, 虚线 = CH
+
+#### DBSCAN
+- 无 K 扫描
+- 参数: eps / min_samples
+- 默认噪声不参与下游分析
+- 可勾选 "Include noise in downstream" 将噪声计入
+
+### 4) 聚类指标
+
+指标（在非噪声子集上计算）:
+- 轮廓系数（Silhouette）
+- Calinski-Harabasz
+- Davies-Bouldin（可选）
+
+若有效簇数 < 2，则指标为空并记录提示。
+
+采样:
+- Metrics sample 用于加速指标计算
+- 默认 2000
+
+### 5) 输出按钮说明
+
+主按钮:
+- 导出结果: 导出聚类明细与汇总表
+- 导出/显示 K 选择图: 生成 K 扫描图（仅 KMeans/层次聚类）
+- 跨 ASIN 对比: 生成 ASIN 分布与属性表
+- 优先级排序: 生成痛点优先级图表
+- 生成 Word 报告（离线）: 输出完整报告
+
+常见输出文件:
+- outputs/clustered_reviews.csv
+- outputs/results.xlsx
+- outputs/k_selection.png
+- outputs/asin_cluster_percent.csv
+- outputs/asin_attribute_matrix.xlsx
+- outputs/cluster_priority.png
+- outputs/review_analysis_report.docx
 
 ---
 
-## 🌐 Language | 语言设置
+## 七、结果解读指南
 
-- 文本语言：输入评论的语言（zh/en）
-- 输出语言：none / zh / en
+### 1) 聚类结果（Cluster Summary）
 
-说明：  
-- 输出语言为 zh/en 时，会翻译标题、表头、关键词、属性名、代表评论等  
-- 英文评论翻译成中文可能出现噪声或乱码，尤其在报告中（属正常现象）  
+字段含义:
+- cluster_id: 聚类编号
+- cluster_size: 聚类样本数
+- ratio: 聚类占比
+- keywords: 该簇关键词（用于语义解释）
+
+解读:
+- ratio 高: 该簇出现频次高，是主要问题或高频话题
+- keywords 与代表评论一起用于命名聚类
+
+### 2) 代表评论（Representatives）
+
+用于解释聚类的真实语句，建议挑选 1-3 条作为报告示例。
+
+### 3) K 选择图
+
+KMeans:
+- 实线: 惯性 SSE（肘部法）
+- 虚线: 轮廓系数
+- 竖线: 推荐 K
+
+层次聚类:
+- 实线: 轮廓系数
+- 虚线: CH
+- 竖线: 推荐 K
+
+### 4) 跨 ASIN 分布
+
+ASIN × Cluster 占比热力图:
+- 颜色越深，表示该 ASIN 在该簇占比越高
+- 可用于发现某产品特有问题
+
+### 5) 设计属性分析
+
+asin_attribute_matrix.xlsx:
+- attribute_taxonomy: 聚类映射成设计属性
+- asin_attribute_share: 各 ASIN 的属性占比
+- asin_attribute_pain: 各 ASIN 的痛点强度
+- opportunity_top: 机会点（高于基准痛点）
+
+解读:
+- Share 高: 该属性是产品评论中高频话题
+- Pain 高: 该属性存在明显用户痛点
+- Opportunity: 相对行业均值的高痛点区域
+
+### 6) 优先级排序（Priority）
+
+Priority = 频次 × 严重度
+- 频次高且评分低的簇优先级更高
+
+### 7) 方法对比表
+
+列:
+- 聚类方法
+- 聚类数
+- 轮廓系数
+- Calinski-Hara
+- 聚类结果可解释性
+
+解释性规则:
+- 根据轮廓系数给出 高 / 中 / 低
+- 噪声比例过高会提示“噪声较多”
+- 若有效簇不足，说明“簇数不足”
 
 ---
 
-## 📤 Outputs | 输出结果
+## 八、常见问题
 
-- Excel 表：聚类汇总、ASIN×属性占比、ASIN×痛点、机会点  
-- PNG 图：K 选择图、热力图、优先级图  
-- Word 报告：方法、参数、聚类结果、属性分析、跨 ASIN 对比  
+1) 运行很慢
+- 首次启动需要加载模型
+- 大数据量时建议提高筛选阈值
+- 使用 Metrics sample 加速指标计算
+
+2) DBSCAN 全是噪声
+- eps 过小或 min_samples 过大
+- 适当调大 eps 或降低 min_samples
+
+3) 指标为空
+- 聚类结果不足 2 个簇
+- DBSCAN 噪声占比过高
 
 ---
 
-## 📦 Packaging | 打包（稳定方案）
-
-此方案通过 **Launcher + 复制完整 venv**，避免 PyInstaller + torch DLL 报错。
-
-CMD 单行命令：
+## 九、打包（稳定方案）
 
 ```bat
 del /f /q ReviewAnalyzer.spec 2>nul & rmdir /s /q build dist 2>nul & venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onedir --windowed --name ReviewAnalyzer launcher.py & xcopy /e /i /y /q venv dist\ReviewAnalyzer\venv & xcopy /e /i /y /q core dist\ReviewAnalyzer\app\core & xcopy /e /i /y /q ui dist\ReviewAnalyzer\app\ui & xcopy /e /i /y /q models dist\ReviewAnalyzer\app\models & xcopy /e /i /y /q outputs dist\ReviewAnalyzer\app\outputs & copy /y main.py dist\ReviewAnalyzer\app\main.py & copy /y config.py dist\ReviewAnalyzer\app\config.py & copy /y settings.json dist\ReviewAnalyzer\app\settings.json
 ```
 
-分发方式：  
-- 打包后将 `dist/ReviewAnalyzer` 整个文件夹打包成 zip  
-- 用户解压后直接运行 `ReviewAnalyzer.exe`  
-
-启动说明：  
-- 首次启动会慢（模型初始化）  
-- 后续启动明显更快  
+分发方式:
+- 打包 dist/ReviewAnalyzer 文件夹为 zip
+- 用户解压后运行 ReviewAnalyzer.exe
 
 ---
 
-## 📝 License | 许可
+## 十、许可
 
 仅用于学术研究与教学演示，商业用途请自查模型与依赖许可。
 

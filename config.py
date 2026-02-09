@@ -104,6 +104,28 @@ class AppConfig:
     k_penalty_strength: float = 0.02
     random_state: int = 42
 
+    # Clustering method
+    clustering_method: str = "KMeans"  # KMeans / DBSCAN / Agglomerative
+
+    # KMeans params
+    kmeans_init: str = "k-means++"
+    kmeans_n_init: str = "auto"
+    kmeans_max_iter: int = 500
+    kmeans_tol: float = 1e-4
+
+    # DBSCAN params
+    dbscan_eps: float = 0.5
+    dbscan_min_samples: int = 5
+    dbscan_metric: str = "euclidean"
+    dbscan_noise_handling: str = "exclude"  # exclude / keep
+
+    # Agglomerative params
+    agg_linkage: str = "ward"
+    agg_metric: str = "euclidean"
+
+    # Metrics
+    metrics_sample_size: int = 2000
+
     # Step5：聚类结果分析
     top_keywords: int = 8
     top_representatives: int = 3
@@ -170,6 +192,17 @@ class AppConfig:
 
         if not self.output_language:
             self.output_language = "none"
+
+        if not getattr(self, "clustering_method", None):
+            self.clustering_method = "KMeans"
+
+        if getattr(self, "dbscan_eps", None) is None or self.dbscan_eps <= 0:
+            self.dbscan_eps = 0.5
+        if getattr(self, "dbscan_min_samples", None) is None or self.dbscan_min_samples <= 0:
+            self.dbscan_min_samples = 5
+
+        if getattr(self, "metrics_sample_size", None) is None or self.metrics_sample_size <= 0:
+            self.metrics_sample_size = 2000
 
         # sentiment_model 允许为空，但不要让它变成非字符串
         if self.sentiment_model is not None and not isinstance(self.sentiment_model, str):

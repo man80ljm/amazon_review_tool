@@ -11,5 +11,17 @@
   "fusion_keep_threshold": 1.5,
   "sentiment_model_key": "zh_dianping",
   "sentiment_model": "models/sentiment/zh_dianping",
-  "output_language": "en"
+  "output_language": "en",
+  "clustering_method": "KMeans",
+  "kmeans_init": "k-means++",
+  "kmeans_n_init": "auto",
+  "kmeans_max_iter": 500,
+  "kmeans_tol": 0.0001,
+  "dbscan_eps": 0.5,
+  "dbscan_min_samples": 5,
+  "dbscan_metric": "euclidean",
+  "dbscan_noise_handling": "exclude",
+  "agg_linkage": "ward",
+  "agg_metric": "euclidean",
+  "metrics_sample_size": 2000
 }

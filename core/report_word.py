@@ -344,22 +344,95 @@ def _add_sentiment_distribution(doc: Document, df_all: pd.DataFrame, translate_f
     doc.add_paragraph(str(vc))
 
 
-def _add_k_table(doc: Document, k_to_inertia: Dict[int, float], k_to_sil: Dict[int, float], k_best: int, translate_fn=None):
+def _add_k_table(
+    doc: Document,
+    k_to_inertia: Dict[int, float],
+    k_to_sil: Dict[int, float],
+    k_best: Optional[int],
+    k_to_ch: Optional[Dict[int, float]] = None,
+    translate_fn=None
+):
+    if not k_to_inertia and not k_to_sil or k_best is None:
+        doc.add_heading(_tr("K Selection / K选择", translate_fn), level=2)
+        doc.add_paragraph(_tr("K scan not applicable or not available for this method.", translate_fn))
+        return
+
     doc.add_heading(_tr("K Selection (Elbow + Silhouette) / K选择", translate_fn), level=2)
     doc.add_paragraph(_tr(f"Recommended K = {k_best}", translate_fn))
 
-    table = doc.add_table(rows=1, cols=3)
+    has_inertia = bool(k_to_inertia)
+    has_ch = bool(k_to_ch)
+    cols = 1 + (1 if has_inertia else 0) + 1 + (1 if has_ch else 0)
+    table = doc.add_table(rows=1, cols=cols)
     hdr = table.rows[0].cells
     hdr[0].text = _tr("K", translate_fn)
-    hdr[1].text = _tr("Inertia(SSE)", translate_fn)
-    hdr[2].text = _tr("Silhouette", translate_fn)
+    col_idx = 1
+    if has_inertia:
+        hdr[col_idx].text = _tr("Inertia(SSE)", translate_fn)
+        col_idx += 1
+    hdr[col_idx].text = _tr("Silhouette", translate_fn)
+    col_idx += 1
+    if has_ch:
+        hdr[col_idx].text = _tr("Calinski-Harabasz", translate_fn)
 
     ks = sorted(set(list(k_to_inertia.keys()) + list(k_to_sil.keys())))
     for k in ks:
         row = table.add_row().cells
         row[0].text = _tr(f"{k}{' (best)' if int(k) == int(k_best) else ''}", translate_fn)
-        row[1].text = f"{float(k_to_inertia.get(k, 0.0)):.2f}"
-        row[2].text = f"{float(k_to_sil.get(k, 0.0)):.4f}"
+        col_idx = 1
+        if has_inertia:
+            row[col_idx].text = f"{float(k_to_inertia.get(k, 0.0)):.2f}"
+            col_idx += 1
+        row[col_idx].text = f"{float(k_to_sil.get(k, 0.0)):.4f}"
+        col_idx += 1
+        if has_ch:
+            row[col_idx].text = f"{float((k_to_ch or {}).get(k, 0.0)):.4f}"
+
+
+def _add_clustering_method_section(
+    doc: Document,
+    method: Optional[str],
+    params: Optional[Dict[str, Any]],
+    metrics: Optional[Dict[str, Any]],
+    meta: Optional[Dict[str, Any]],
+    comparison_df: Optional[pd.DataFrame],
+    translate_fn=None
+):
+    doc.add_heading(_tr("Clustering Method & Metrics / 聚类方法与指标", translate_fn), level=2)
+
+    if method:
+        doc.add_paragraph(_tr(f"Method: {method}", translate_fn))
+
+    if params:
+        doc.add_paragraph(_tr(f"Parameters: {params}", translate_fn))
+
+    if metrics:
+        sil = metrics.get("silhouette")
+        ch = metrics.get("calinski_harabasz")
+        db = metrics.get("davies_bouldin")
+        note = metrics.get("note")
+        parts = [f"silhouette={sil}", f"calinski_harabasz={ch}", f"davies_bouldin={db}"]
+        doc.add_paragraph(_tr("Metrics: " + ", ".join(parts), translate_fn))
+        if note:
+            doc.add_paragraph(_tr(f"Note: {note}", translate_fn))
+
+    if meta:
+        noise_ratio = meta.get("noise_ratio")
+        n_clusters = meta.get("n_clusters")
+        if noise_ratio is not None:
+            doc.add_paragraph(_tr(f"Noise ratio: {noise_ratio}", translate_fn))
+        if n_clusters is not None:
+            doc.add_paragraph(_tr(f"Clusters (excluding noise): {n_clusters}", translate_fn))
+
+    if comparison_df is not None:
+        _add_df_table(
+            doc,
+            comparison_df,
+            heading="Clustering Methods Comparison / 聚类方法对比",
+            max_rows=10,
+            max_cols=8,
+            translate_fn=translate_fn
+        )
 
 
 def _add_cluster_summary(doc: Document, summary_df: Optional[pd.DataFrame], translate_fn=None):
@@ -608,7 +681,8 @@ def build_offline_report(
     df_work: pd.DataFrame,
     k_to_inertia: Dict[int, float],
     k_to_silhouette: Dict[int, float],
-    k_best: int,
+    k_to_ch: Optional[Dict[int, float]] = None,
+    k_best: Optional[int] = None,
     cluster_summary: Optional[pd.DataFrame],
     reps_df: Optional[pd.DataFrame],
     k_plot_png: Optional[str] = None,
@@ -620,6 +694,11 @@ def build_offline_report(
     asin_attr_pain_png: Optional[str] = None,
     key_findings_with_metrics: bool = False,
     k_method_note: str | None = None,
+    clustering_method: Optional[str] = None,
+    clustering_params: Optional[Dict[str, Any]] = None,
+    clustering_metrics: Optional[Dict[str, Any]] = None,
+    clustering_meta: Optional[Dict[str, Any]] = None,
+    method_comparison_df: Optional[pd.DataFrame] = None,
     translate_fn=None
 ) -> str:
     """
@@ -656,15 +735,37 @@ def build_offline_report(
     _add_data_overview(doc, df_all, df_work, translate_fn=translate_fn)
     _add_sentiment_distribution(doc, df_all, translate_fn=translate_fn)
 
+    # Method + metrics
+    _add_clustering_method_section(
+        doc,
+        clustering_method,
+        clustering_params,
+        clustering_metrics,
+        clustering_meta,
+        method_comparison_df,
+        translate_fn=translate_fn
+    )
+
     # K selection
-    _add_k_table(doc, k_to_inertia or {}, k_to_silhouette or {}, int(k_best), translate_fn=translate_fn)
+    _add_k_table(
+        doc,
+        k_to_inertia or {},
+        k_to_silhouette or {},
+        k_best,
+        k_to_ch=k_to_ch,
+        translate_fn=translate_fn
+    )
     if k_method_note:
         doc.add_paragraph(_tr(k_method_note, translate_fn))
 
     if _safe_exists(k_plot_png):
         doc.add_paragraph(_tr("Legend:", translate_fn))
-        doc.add_paragraph(_tr("- Solid line: WCSS/Inertia (Elbow)", translate_fn))
-        doc.add_paragraph(_tr("- Dashed line: Silhouette score", translate_fn))
+        if (clustering_method or "").lower() == "agglomerative":
+            doc.add_paragraph(_tr("- Solid line: Silhouette score", translate_fn))
+            doc.add_paragraph(_tr("- Dashed line: Calinski-Harabasz score", translate_fn))
+        else:
+            doc.add_paragraph(_tr("- Solid line: WCSS/Inertia (Elbow)", translate_fn))
+            doc.add_paragraph(_tr("- Dashed line: Silhouette score", translate_fn))
         doc.add_paragraph(_tr("- Vertical line: recommended K", translate_fn))
     _add_picture_if_exists(
         doc,
